@@ -33,7 +33,7 @@
 
 ## 2. 还没完成 / 未做的功能
 
-- **公网访问**：应用仅绑定在 `localhost:3000`，员工目前无法访问（见 §6）
+- ~~**公网访问**：已通过 Cloudflare Tunnel 启用，地址 `https://admin.xiaofamous.com`~~
 - 管理员账户体系：只有单一共享密码，没有多员工账户、没有操作日志
 - 产品列表没有分页（产品多时会一次性全返回）
 - 评论也没有分页 / 懒加载
@@ -153,20 +153,32 @@ ls -t ~/backups/xft/uploads-*.tar.gz | tail -n +31 | xargs -r rm
 |---|---|
 | 服务形态 | `systemctl --user` 服务 `xiaofamoustalk.service`（已 enable + active） |
 | 绑定地址 | `0.0.0.0:3000`（实际仅本机可达，因为机器在 NAT 后） |
-| 反向代理 | 无（当前直接暴露 Node 应用） |
-| 公网可访问 | **❌ 否** |
+| 反向代理 | Cloudflare Tunnel（`cloudflared` systemd 服务） |
+| 公网可访问 | **✅ 是** — `https://admin.xiaofamous.com` |
 | 本机 IP | `192.168.31.65`（内网）|
 | Tailscale | 已装，IP `100.93.5.119`，DNS `workstation.tail9c7884.ts.net`，tailnet 内已可访问 `http://workstation.tail9c7884.ts.net:3000` |
-| cloudflared | 已装，未配置 |
+| cloudflared | ✅ 已配置，Tunnel ID `23ab4493-4b88-43bd-acbc-56442e39dc55`，域名 `admin.xiaofamous.com` |
 | 机器开机自启 | ✅（linger 已开）|
 
-### 可选的公网暴露方案（待决定）
+### 公网访问（已启用）
 
-1. **Tailscale Serve（内网）**：`tailscale serve --bg --https=443 http://localhost:3000`，只有 tailnet 成员访问 → 员工需要装 Tailscale 并被邀请加入
-2. **Tailscale Funnel（公网）**：`tailscale funnel --bg --https=443 http://localhost:3000`，立即拿到 `https://workstation.tail9c7884.ts.net`，全网可访问；/admin 仍然有密码保护
-3. **Cloudflare Tunnel**：需要 Cloudflare 账号 + 一个托管在 CF 的域名，能得到 `https://talk.yourdomain.com`
+**方案：Cloudflare Tunnel**（2026-04-20 启用）
 
-当前都**没有启用**，见 §10 待办。
+- 公网地址：`https://admin.xiaofamous.com`
+- Tunnel ID：`23ab4493-4b88-43bd-acbc-56442e39dc55`
+- 配置文件：`/home/andrew/.cloudflared/config.yml`
+- 凭证文件：`/home/andrew/.cloudflared/23ab4493-4b88-43bd-acbc-56442e39dc55.json`
+- 证书文件：`/home/andrew/.cloudflared/cert.pem`
+- systemd 服务：`cloudflared.service`（系统级，非 user 级）
+
+```bash
+# 管理 tunnel 服务
+sudo systemctl status cloudflared
+sudo systemctl restart cloudflared
+sudo journalctl -u cloudflared -f
+```
+
+备选方案（未启用）：Tailscale Funnel / Tailscale Serve，如需切换见旧版文档。
 
 ---
 
@@ -174,7 +186,7 @@ ls -t ~/backups/xft/uploads-*.tar.gz | tail -n +31 | xargs -r rm
 
 优先级按上→下递减：
 
-1. **选定公网访问方案**并启用（见 §6），给员工一个能用的地址
+1. ~~**选定公网访问方案**并启用~~ — ✅ 已完成（Cloudflare Tunnel，`https://admin.xiaofamous.com`）
 2. 自动备份：加上 §5 的 cron 脚本，定期 rsync 到另一台机
 3. Admin 审计日志：记录谁（哪个 session）在什么时间新增/改/删/导入了什么产品
 4. Admin 多账户：把单一 `ADMIN_PASSWORD` 升级成员工级账号表（username + bcrypt hash）
@@ -248,7 +260,7 @@ curl -X POST http://localhost:3000/api/admin/login \
 
 ### 待确认
 
-- 公网访问方案是走 Tailscale Funnel 还是 Cloudflare Tunnel — 取决于员工能否装 Tailscale、是否有自己的域名
+- ~~公网访问方案~~ — ✅ 已选定 Cloudflare Tunnel，域名 `admin.xiaofamous.com`
 - 备份目标位置：本机 `~/backups` 还是另一台机？长期仅本机备份等于没备份（盘坏就全没）
 - 产品的 `image` 字段既可能是 `/uploads/xxx.jpg` 也可能是 `https://...`，前端不区分；迁移机器时外链不迁，本地上传需随 uploads/ 一起拷
 
