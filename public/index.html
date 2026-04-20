@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Xiaofamous Talk · 小有名气 · 慢聊</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a href="#/" class="logo">
+          <span class="logo-dot"></span>
+          <span>xiaofamous<em>·talk</em></span>
+        </a>
+        <nav>
+          <a href="#/">产品</a>
+          <a class="subtle" href="#/about">关于</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="app" class="wrap"></main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>© 小有名气 · Talk</span>
+        <span class="muted">一点点产品，一点点闲聊</span>
+      </div>
+    </footer>
+
+    <template id="tpl-product-card">
+      <a class="product-card" href="#/">
+        <div class="product-img"><img alt="" loading="lazy" /></div>
+        <div class="product-body">
+          <h3 class="product-name"></h3>
+          <p class="product-desc"></p>
+          <div class="product-meta">
+            <span class="meta-comments"></span>
+            <span class="meta-arrow">查看 →</span>
+          </div>
+        </div>
+      </a>
+    </template>
+
+    <template id="tpl-comment">
+      <article class="comment">
+        <div class="comment-avatar"></div>
+        <div class="comment-main">
+          <header>
+            <span class="comment-user"></span>
+            <time class="comment-time"></time>
+          </header>
+          <p class="comment-body"></p>
+          <div class="comment-image-wrap hidden"><img class="comment-image" alt="" /></div>
+          <footer>
+            <button class="like-btn" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              <span class="like-count">0</span>
+            </button>
+            <button class="reply-btn" type="button">回复</button>
+            <button class="delete-btn hidden" type="button">删除</button>
+          </footer>
+          <div class="reply-slot"></div>
+          <div class="replies"></div>
+        </div>
+      </article>
+    </template>
+
+    <template id="tpl-reply-form">
+      <form class="reply-form">
+        <textarea name="body" placeholder="写下你的回复…" maxlength="1000" required></textarea>
+        <div class="reply-form-row">
+          <button type="button" class="reply-cancel">取消</button>
+          <button type="submit" class="reply-submit">发送</button>
+        </div>
+        <p class="reply-error hidden"></p>
+      </form>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
