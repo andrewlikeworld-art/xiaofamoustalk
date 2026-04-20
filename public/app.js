@@ -81,6 +81,12 @@ async function renderHome() {
       node.querySelector('.product-name').textContent = p.name;
       node.querySelector('.product-desc').textContent = p.description;
       node.querySelector('.meta-comments').textContent = `${p.comment_count} 条评论`;
+      if (p.sellable && p.price) {
+        const tag = document.createElement('span');
+        tag.className = 'card-price';
+        tag.textContent = `¥${(p.price / 100).toFixed(2)}`;
+        node.querySelector('.product-body').appendChild(tag);
+      }
       grid.appendChild(node);
     }
   } catch (err) {
@@ -235,6 +241,20 @@ async function renderProduct(id) {
   }
   const { product, comments, total } = data;
 
+  const priceBlock = product.sellable && product.price
+    ? `<div class="price-block">
+         <div class="price-amount">¥<span>${(product.price / 100).toFixed(2)}</span></div>
+         <div class="pay-buttons">
+           <button class="pay-btn pay-wechat" type="button" data-provider="wechat">
+             <span class="pay-icon">💬</span>微信支付
+           </button>
+           <button class="pay-btn pay-alipay" type="button" data-provider="alipay">
+             <span class="pay-icon">💙</span>支付宝
+           </button>
+         </div>
+       </div>`
+    : '';
+
   app.innerHTML = `
     <a class="back-link" href="#/">← 返回全部产品</a>
     <section class="product-page">
@@ -242,6 +262,7 @@ async function renderProduct(id) {
       <div class="product-detail">
         <h1>${escapeHtml(product.name)}</h1>
         <p>${escapeHtml(product.description)}</p>
+        ${priceBlock}
       </div>
     </section>
 
@@ -327,6 +348,10 @@ async function renderProduct(id) {
     filePreview.classList.add('hidden');
   });
 
+  document.querySelectorAll('.pay-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openPayModal(id, btn.dataset.provider));
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorEl.classList.add('hidden');
@@ -368,6 +393,80 @@ async function renderProduct(id) {
       submitBtn.disabled = false;
     }
   });
+}
+
+async function openPayModal(productId, provider) {
+  const overlay = document.createElement('div');
+  overlay.className = 'pay-modal';
+  overlay.innerHTML = `
+    <div class="pay-modal-card" role="dialog" aria-modal="true">
+      <button class="pay-close" type="button" aria-label="关闭">×</button>
+      <h3 class="pay-title">${provider === 'alipay' ? '支付宝支付' : '微信支付'}</h3>
+      <div class="pay-body">
+        <p class="loading">正在生成支付二维码…</p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const body = overlay.querySelector('.pay-body');
+  const close = () => { clearInterval(overlay._poll); overlay.remove(); };
+  overlay.querySelector('.pay-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  let order;
+  try {
+    order = await api(`/api/products/${productId}/pay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider }),
+    });
+  } catch (err) {
+    body.innerHTML = `<p class="pay-error">下单失败：${escapeHtml(err.message)}</p>`;
+    return;
+  }
+
+  const amount = (order.amount / 100).toFixed(2);
+  const mockHint = order.mode === 'mock'
+    ? `<p class="pay-mock-hint">⚠️ 当前为模拟支付模式（未接入真实支付）。扫码或 <a href="${order.mock_url}" target="_blank" rel="noopener">点此模拟支付</a>。</p>`
+    : '';
+  body.innerHTML = `
+    <div class="pay-amount">¥ ${amount}</div>
+    <div class="pay-qr-wrap">
+      ${order.qr_data_url
+        ? `<img class="pay-qr" alt="支付二维码" src="${order.qr_data_url}" />`
+        : '<p class="empty">二维码生成失败</p>'}
+    </div>
+    <p class="pay-tip">${provider === 'alipay' ? '请使用支付宝扫码' : '请使用微信扫码'}支付</p>
+    ${mockHint}
+    <p class="pay-status muted">订单号：${order.out_trade_no}</p>
+    <p class="pay-poll-status muted">正在等待支付…</p>
+  `;
+
+  const statusEl = overlay.querySelector('.pay-poll-status');
+  let stopped = false;
+  overlay._poll = setInterval(async () => {
+    if (stopped) return;
+    try {
+      const s = await api(`/api/orders/${order.out_trade_no}`);
+      if (s.status === 'paid') {
+        stopped = true;
+        clearInterval(overlay._poll);
+        body.innerHTML = `
+          <div class="pay-success">
+            <div class="pay-success-icon">✅</div>
+            <div class="pay-success-title">支付成功</div>
+            <div class="muted">感谢你的购买 · ¥${amount}</div>
+            <button class="submit-btn pay-success-close" type="button">关闭</button>
+          </div>`;
+        body.querySelector('.pay-success-close').addEventListener('click', close);
+      } else if (s.status === 'failed' || s.status === 'canceled') {
+        stopped = true;
+        clearInterval(overlay._poll);
+        statusEl.innerHTML = `<span class="pay-error">支付已${s.status === 'failed' ? '失败' : '取消'}</span>`;
+      }
+    } catch {}
+  }, 2000);
 }
 
 function route() {

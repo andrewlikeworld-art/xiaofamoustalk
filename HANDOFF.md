@@ -11,6 +11,7 @@
 ### 公开端（面向访客）
 - 产品列表页（首页），响应式网格布局
 - 产品详情页（图片 / 名称 / 描述）
+- **可销售商品显示价格 + 微信/支付宝支付按钮**（见 §11）
 - 评论系统：发评论、上传图片、点赞、按"热度/最新"切换
 - 评论回复（单层嵌套，回复的回复挂到根评论下）
 - 删除自己的评论（基于 `uid` cookie 身份识别）
@@ -21,9 +22,11 @@
 - 密码登录（HttpOnly cookie + DB session，7 天过期）
 - 产品的增 / 改 / 删（单个）
 - 图片既支持上传也支持填 URL
+- **每个产品可选「开放销售」+ 价格**（见 §11 支付）
 - **CSV 批量导入**（upsert by name）：上传 CSV → 同名更新、新名字新增、返回 `created / updated / failed / errors`
 - CSV 模板下载（/api/admin/products/template.csv，带 UTF-8 BOM 便于 Excel 打开）
 - 编辑 / 删除时自动清理旧上传图片文件
+- 订单列表 API：`GET /api/admin/orders`（目前还没做前端页面，直接 curl 查）
 
 ### 基础设施
 - `systemd --user` 服务跑应用，已 `enable --now`，linger 已开，重启后自动起
@@ -269,6 +272,87 @@ curl -X POST http://localhost:3000/api/admin/login \
 - 删除评论时若同一产品下有很多回复，前端用 `confirm()` 弹窗，没做成美观的模态框
 - CSV 导入时如果 description 字段里有真实的回车（非被 `"` 包起来的），解析会失败——这是 CSV 规范要求，不算 bug，但员工可能踩，需要在 UI 里更明显地提示
 - 前端 `admin.js` 里 `openForm` 填 `image_url` 时用 `product.image.startsWith('/uploads/')` 判断是不是上传来的；如果将来允许相对路径但不在 /uploads 下，判断会错
+
+---
+
+---
+
+## 11. 支付（微信 / 支付宝）
+
+> 2026-04-20 加入。当前默认 `PAY_MODE=mock`，用占位二维码走通前端。凭证就位后切 `live` 即可。
+
+### 数据模型
+
+- `products` 表新增：
+  - `sellable INTEGER NOT NULL DEFAULT 0`
+  - `price INTEGER`（存 **分**，例如 `2980` = ¥29.80；统一避免浮点误差）
+- 新增 `orders` 表：`out_trade_no`（我方订单号）、`product_id`、`user_id`（来自 uid cookie）、`amount`（分）、`provider`（`wechat`/`alipay`）、`status`（`pending`/`paid`/`failed`/`canceled`）、`provider_trade_no`、`created_at`、`paid_at`
+
+### 接入逻辑（`server.js` + `payments.js`）
+
+- `POST /api/products/:id/pay` body `{ provider: 'wechat' | 'alipay' }` → 建订单，返回 `{ out_trade_no, amount, qr_data_url, code_url?, mode }`
+- `GET /api/orders/:out_trade_no` → 返回状态（前端每 2 秒轮询）
+- `POST /api/pay/wechat/notify` → 微信 V3 回调（验签 + AES-256-GCM 解密 + 标记 paid）
+- `POST /api/pay/alipay/notify` → 支付宝回调（RSA2 验签 + 标记 paid）
+- mock 模式：`GET /mock-pay/:out_trade_no` 渲染一个"点一下就付"的网页；`POST /api/orders/:out_trade_no/mock-pay` 把订单标成 paid
+- 管理端：`GET /api/admin/orders` 列出近 200 单
+
+微信 Native V3 和支付宝当面付两种**都是扫码支付**，对 PC / 手机浏览器通用。如果以后要上 JSAPI / H5 / 小程序支付，在 `payments.js` 里加对应方法即可。
+
+### 切到 live 模式的步骤
+
+1. 申请通过后拿到这些材料：
+   - 微信：AppID、商户号、APIv3 密钥、商户 API 证书（`apiclient_cert.pem` + `apiclient_key.pem`）、商户证书序列号、平台证书（商户平台可下载）
+   - 支付宝：AppID、应用私钥、支付宝公钥
+2. 把证书文件放到 `/home/andrew/xiaofamoustalk/secrets/`（已 gitignore uploads/.env，建议把这个路径也 gitignore 掉）
+3. 填 [.env](.env)，把 `PAY_MODE=live`，填所有 `WECHAT_*` / `ALIPAY_*`（模板见 [.env.example](.env.example)）
+4. `systemctl --user restart xiaofamoustalk.service`
+5. 到微信商户平台 / 支付宝开放平台**配置回调 URL**：
+   - 微信：`https://talk.xiaofamous.com/api/pay/wechat/notify`
+   - 支付宝：`https://talk.xiaofamous.com/api/pay/alipay/notify`
+6. 小金额真机测一笔
+
+### 已知风险 / 待做
+
+- **没做订单超时自动取消**：pending 订单会一直留着；长期建议加 cron 把 30 分钟前仍 pending 的订单关掉（微信侧 V3 有 `close` 接口）
+- **退款接口没做**：`payments.js` 只覆盖了下单和回调
+- **管理后台订单列表 UI 没做**：现在只能 curl `/api/admin/orders`
+- **没做幂等防重**：`markOrderPaid` 用 `status = 'pending'` 做 WHERE 条件已能防重复支付回调多次执行业务；但金额一致性没有二次校验，上线前建议加："回调里解密出来的 amount 必须 === DB 里订单的 amount"
+- **mock 模式一定不能出现在生产**：`/api/orders/:n/mock-pay` 会直接标 paid。`live` 模式下这条路由会 403，但 `PAY_MODE` 记得真的改成 `live`
+
+---
+
+## 12. 版本日志
+
+### 2026-04-20 · 支付骨架（mock 可跑通）
+
+**新增**
+- 产品可标记为「开放销售」并填写价格（元 → 分存储）
+- 公开端产品详情页显示价格 + 微信 / 支付宝两颗支付按钮 + 二维码弹窗 + 2 秒轮询订单状态
+- 首页卡片上显示价格
+- 新 `orders` 表 + `POST /api/products/:id/pay`、`GET /api/orders/:out_trade_no`
+- `POST /api/pay/{wechat,alipay}/notify` 回调入口（含验签 + 解密代码，等凭证即可生效）
+- `GET /api/admin/orders`（只有接口，没做管理端 UI）
+- mock 模式：`PAY_MODE=mock` 下返回模拟二维码，扫码打开 `/mock-pay/:out_trade_no`，点一下标成功
+- [payments.js](payments.js)：微信 Native V3 + 支付宝当面付两家的下单 / 验签实现
+- 新增依赖：`qrcode`
+- `.env` / `.env.example` 加 `PAY_MODE`、`PUBLIC_BASE_URL`、两家支付商的凭证占位
+- `.gitignore` 加 `backups/`、`secrets/`
+
+**风险 / 注意**
+- 真实支付代码**未经过 live 回归**，等凭证到位时需小额真机联测
+- 没做订单超时自动取消（pending 订单会一直留着）
+- 没做退款接口
+- 回调里没做金额一致性二次校验（回调解密出的 amount 应与 DB 订单 amount 比对）
+- mock 模式**不能误上生产**：live 模式下 mock-pay 路由会返回 403，但 `PAY_MODE` 本身记得真的改成 `live`
+- 管理端订单列表 UI 还没做
+
+**下一步建议（按优先级）**
+1. 拿到微信 / 支付宝凭证后切 `PAY_MODE=live`，配回调 URL，走一笔真实小额
+2. 管理端做订单列表页（列表 / 退款按钮 / 状态筛选）
+3. 订单超时自动关闭（cron）
+4. 回调里加金额一致性校验
+5. §7 里前面列的备份脚本、rate-limiting、评论分页等依旧待做
 
 ---
 

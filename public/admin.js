@@ -89,10 +89,13 @@ async function loadProducts() {
     for (const p of products) {
       const row = document.createElement('div');
       row.className = 'admin-row';
+      const priceTag = p.sellable && p.price
+        ? `<span class="price-tag">¥${(p.price / 100).toFixed(2)} · 销售中</span>`
+        : '<span class="off-tag">未销售</span>';
       row.innerHTML = `
         <div class="admin-row-img"><img src="${escapeHtml(p.image)}" alt="" /></div>
         <div class="admin-row-body">
-          <div class="admin-row-title">${escapeHtml(p.name)}</div>
+          <div class="admin-row-title">${escapeHtml(p.name)} ${priceTag}</div>
           <div class="admin-row-desc">${escapeHtml(p.description)}</div>
           <div class="admin-row-meta muted">${p.comment_count} 条评论 · #${p.id}</div>
         </div>
@@ -117,6 +120,8 @@ function openForm(product = null) {
   form.description.value = product?.description || '';
   form.image_url.value = product && !product.image.startsWith('/uploads/') ? product.image : '';
   form.image.value = '';
+  form.sellable.checked = !!(product && product.sellable);
+  form.price.value = product && product.price != null ? (product.price / 100).toFixed(2) : '';
   if (product) {
     currentImage.classList.remove('hidden');
     currentImage.querySelector('img').src = product.image;
@@ -147,17 +152,25 @@ form.addEventListener('submit', async (e) => {
   const description = form.description.value.trim();
   const file = form.image.files?.[0];
   const imageUrl = form.image_url.value.trim();
+  const sellable = form.sellable.checked;
+  const priceStr = form.price.value.trim();
 
   if (!name) return showFormError('请填写产品名称');
   if (!description) return showFormError('请填写产品描述');
   if (!editingId && !file && !imageUrl) return showFormError('请上传图片或填写图片链接');
   if (file && file.size > 5 * 1024 * 1024) return showFormError('图片不能超过 5MB');
+  if (sellable) {
+    const p = Number(priceStr);
+    if (!priceStr || !Number.isFinite(p) || p <= 0) return showFormError('开启销售时请填写价格');
+  }
 
   const fd = new FormData();
   fd.append('name', name);
   fd.append('description', description);
   if (file) fd.append('image', file);
   if (imageUrl) fd.append('image_url', imageUrl);
+  fd.append('sellable', sellable ? '1' : '0');
+  if (priceStr) fd.append('price', priceStr);
 
   const submitBtn = form.querySelector('.submit-btn');
   submitBtn.disabled = true;

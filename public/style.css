@@ -328,3 +328,120 @@ main { padding: 40px 0 80px; min-height: 60vh; }
 #import-result.import-error { background: #fde7e3; color: var(--accent); }
 .import-summary b { color: var(--ink); }
 .import-errors { margin: 10px 0 0; padding-left: 20px; color: var(--accent); }
+
+/* ---------- 商品销售 / 支付 ---------- */
+
+/* 管理端表单 */
+.sell-block {
+  border-top: 1px dashed var(--line);
+  padding-top: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.checkbox-field {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; color: var(--ink); cursor: pointer;
+}
+.checkbox-field input { width: 16px; height: 16px; accent-color: var(--accent); }
+.price-field input {
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 10px; padding: 10px 12px; font: inherit; outline: none;
+}
+.price-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* 管理端列表里的价格标签 */
+.price-tag {
+  display: inline-block; margin-left: 6px;
+  font-size: 12px; color: var(--accent);
+  background: var(--accent-soft); padding: 1px 8px; border-radius: 999px;
+  font-weight: 500;
+}
+.off-tag {
+  display: inline-block; margin-left: 6px;
+  font-size: 12px; color: var(--muted);
+  background: #f3ede2; padding: 1px 8px; border-radius: 999px;
+}
+
+/* 首页卡片价格 */
+.card-price {
+  display: inline-block; margin-top: 8px;
+  color: var(--accent); font-weight: 600; font-size: 15px;
+}
+
+/* 产品详情页价格块 */
+.price-block {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.price-amount { font-size: 26px; color: var(--accent); font-weight: 600; letter-spacing: -0.01em; }
+.price-amount span { font-size: 32px; }
+.pay-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+.pay-btn {
+  flex: 1; min-width: 140px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 10px; padding: 12px 16px; font: inherit; font-size: 15px;
+  font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, transform .1s ease, box-shadow .15s ease;
+}
+.pay-btn:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow); }
+.pay-btn.pay-wechat:hover { border-color: #07c160; color: #07c160; }
+.pay-btn.pay-alipay:hover { border-color: #1677ff; color: #1677ff; }
+.pay-icon { font-size: 18px; }
+
+/* 支付弹窗 */
+.pay-modal {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(20, 14, 5, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  animation: fadeIn .18s ease;
+}
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+
+.pay-modal-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 24px 24px 20px;
+  width: 100%; max-width: 380px;
+  position: relative;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.pay-close {
+  position: absolute; top: 10px; right: 12px;
+  background: transparent; border: 0; font-size: 24px;
+  color: var(--muted); cursor: pointer; line-height: 1; padding: 4px 8px;
+}
+.pay-close:hover { color: var(--accent); }
+
+.pay-title { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+.pay-amount { font-size: 28px; color: var(--accent); font-weight: 600; margin: 14px 0; }
+.pay-qr-wrap {
+  display: flex; justify-content: center; align-items: center;
+  margin: 10px 0 12px;
+  min-height: 240px;
+}
+.pay-qr {
+  width: 240px; height: 240px; display: block;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff;
+}
+.pay-tip { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+.pay-mock-hint {
+  background: #fff8e1; border: 1px solid #f5d879; color: #8a6d00;
+  font-size: 12px; padding: 8px 10px; border-radius: 8px; margin: 8px 0;
+  line-height: 1.5;
+}
+.pay-mock-hint a { color: #8a6d00; font-weight: 600; }
+.pay-status, .pay-poll-status { font-size: 12px; margin: 6px 0 0; }
+.pay-error { color: var(--accent); font-weight: 500; }
+
+.pay-success {
+  padding: 20px 0 10px;
+}
+.pay-success-icon { font-size: 48px; }
+.pay-success-title { font-size: 20px; font-weight: 600; margin: 8px 0; color: #2a8a3e; }
+.pay-success-close { margin-top: 18px; }

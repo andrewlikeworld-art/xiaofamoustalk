@@ -1,10 +1,12 @@
 import express from 'express';
 import Database from 'better-sqlite3';
 import multer from 'multer';
+import QRCode from 'qrcode';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createPayment, verifyWeChatNotify, verifyAlipayNotify } from './payments.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -49,18 +51,53 @@ if (!commentCols.find((c) => c.name === 'parent_id')) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id)');
 }
 
+const productCols = db.prepare('PRAGMA table_info(products)').all();
+if (!productCols.find((c) => c.name === 'sellable')) {
+  db.exec('ALTER TABLE products ADD COLUMN sellable INTEGER NOT NULL DEFAULT 0');
+}
+if (!productCols.find((c) => c.name === 'price')) {
+  // price stored as integer 分 (cents) to avoid floating point
+  db.exec('ALTER TABLE products ADD COLUMN price INTEGER');
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     expires_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    out_trade_no TEXT NOT NULL UNIQUE,
+    product_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    provider_trade_no TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    paid_at INTEGER,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
+  CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_id);
+  CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 `);
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xiaofamous';
 const ADMIN_SESSION_TTL = 60 * 60 * 24 * 7; // 7 days
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('⚠️  ADMIN_PASSWORD 未设置，使用默认密码 "xiaofamous"。上线前请设置环境变量。');
+}
+
+const PAY_MODE = (process.env.PAY_MODE || 'mock').toLowerCase();
+if (PAY_MODE !== 'mock' && PAY_MODE !== 'live') {
+  console.warn(`⚠️  PAY_MODE="${PAY_MODE}" 无效，回退为 mock`);
+}
+if (PAY_MODE === 'mock') {
+  console.log('💳 支付模式：mock（返回模拟二维码，不会真扣款）');
+} else {
+  console.log('💳 支付模式：live');
 }
 
 const productCount = db.prepare('SELECT COUNT(*) AS c FROM products').get().c;
@@ -216,19 +253,40 @@ function removeUploadFile(url) {
   if (file.startsWith(UPLOAD_DIR)) fs.promises.unlink(file).catch(() => {});
 }
 
+function parseSellable(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  if (v === true || v === 1 || v === '1' || v === 'true' || v === 'on') return 1;
+  return 0;
+}
+
+// price comes in as 元 (可以带小数点)，存分
+function parsePriceYuan(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(String(v).trim());
+  if (!Number.isFinite(n) || n < 0) return NaN;
+  // 四舍五入避免 29.90 变成 2989
+  return Math.round(n * 100);
+}
+
 app.post('/api/admin/products', requireAdmin, upload.single('image'), (req, res) => {
   const name = (req.body.name || '').trim().slice(0, 80);
   const description = (req.body.description || '').trim().slice(0, 2000);
   const imageUrl = (req.body.image_url || '').trim();
   const uploaded = req.file ? `/uploads/${req.file.filename}` : null;
   const image = uploaded || imageUrl;
+  const sellable = parseSellable(req.body.sellable);
+  const price = parsePriceYuan(req.body.price);
   if (!name) return res.status(400).json({ error: '请填写产品名称' });
   if (!description) return res.status(400).json({ error: '请填写产品描述' });
   if (!image) return res.status(400).json({ error: '请上传图片或填写图片链接' });
+  if (Number.isNaN(price)) return res.status(400).json({ error: '价格格式有误' });
+  if (sellable && (price === null || price <= 0)) {
+    return res.status(400).json({ error: '开启销售时必须填写价格（单位：元）' });
+  }
 
   const info = db
-    .prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)')
-    .run(name, image, description);
+    .prepare('INSERT INTO products (name, image, description, sellable, price) VALUES (?,?,?,?,?)')
+    .run(name, image, description, sellable, price);
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json(product);
 });
@@ -242,11 +300,18 @@ app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), (req, r
   const imageUrl = (req.body.image_url || '').trim();
   const uploaded = req.file ? `/uploads/${req.file.filename}` : null;
   const image = uploaded || imageUrl || existing.image;
+  const sellable = parseSellable(req.body.sellable);
+  const priceParsed = parsePriceYuan(req.body.price);
+  const price = priceParsed === null ? existing.price : priceParsed;
   if (!name) return res.status(400).json({ error: '请填写产品名称' });
   if (!description) return res.status(400).json({ error: '请填写产品描述' });
+  if (Number.isNaN(priceParsed)) return res.status(400).json({ error: '价格格式有误' });
+  if (sellable && (!price || price <= 0)) {
+    return res.status(400).json({ error: '开启销售时必须填写价格（单位：元）' });
+  }
 
-  db.prepare('UPDATE products SET name = ?, description = ?, image = ? WHERE id = ?')
-    .run(name, description, image, req.params.id);
+  db.prepare('UPDATE products SET name = ?, description = ?, image = ?, sellable = ?, price = ? WHERE id = ?')
+    .run(name, description, image, sellable, price, req.params.id);
 
   if (image !== existing.image) removeUploadFile(existing.image);
 
@@ -343,8 +408,214 @@ app.post('/api/admin/products/import', requireAdmin, csvUpload.single('file'), (
   res.json({ created, updated, failed, total: matrix.length - 1, errors: errors.slice(0, 20) });
 });
 
+app.get('/api/admin/orders', requireAdmin, (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT o.id, o.out_trade_no, o.product_id, o.amount, o.provider, o.status,
+              o.provider_trade_no, o.created_at, o.paid_at,
+              p.name AS product_name, p.image AS product_image
+       FROM orders o LEFT JOIN products p ON p.id = o.product_id
+       ORDER BY o.id DESC LIMIT 200`
+    )
+    .all();
+  res.json(rows);
+});
+
 app.get('/admin', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// ================= 支付 =================
+
+function publicBaseUrl(req) {
+  const envBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+  if (envBase) return envBase;
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}`;
+}
+
+function newOutTradeNo() {
+  return `XFT${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
+
+function markOrderPaid(out_trade_no, provider_trade_no) {
+  const info = db
+    .prepare(
+      `UPDATE orders SET status = 'paid', paid_at = strftime('%s','now'), provider_trade_no = ?
+       WHERE out_trade_no = ? AND status = 'pending'`
+    )
+    .run(provider_trade_no || null, out_trade_no);
+  return info.changes > 0;
+}
+
+app.post('/api/products/:id/pay', async (req, res) => {
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+  if (!product) return res.status(404).json({ error: '商品不存在' });
+  if (!product.sellable) return res.status(400).json({ error: '该商品未开放销售' });
+  if (!product.price || product.price <= 0) return res.status(400).json({ error: '该商品未设置价格' });
+
+  const provider = req.body?.provider === 'alipay' ? 'alipay' : 'wechat';
+  const out_trade_no = newOutTradeNo();
+
+  db.prepare(
+    'INSERT INTO orders (out_trade_no, product_id, user_id, amount, provider) VALUES (?,?,?,?,?)'
+  ).run(out_trade_no, product.id, req.userId, product.price, provider);
+
+  const base = publicBaseUrl(req);
+  const notifyUrl = `${base}/api/pay/${provider}/notify`;
+
+  try {
+    if (PAY_MODE === 'mock') {
+      const mockUrl = `${base}/mock-pay/${out_trade_no}`;
+      const qrDataUrl = await QRCode.toDataURL(mockUrl, { width: 240, margin: 1 });
+      return res.json({
+        out_trade_no,
+        amount: product.price,
+        provider,
+        mode: 'mock',
+        qr_data_url: qrDataUrl,
+        mock_url: mockUrl,
+      });
+    }
+
+    const result = await createPayment(provider, {
+      out_trade_no,
+      amount: product.price,
+      subject: product.name,
+      notify_url: notifyUrl,
+      return_url: `${base}/#/product/${product.id}`,
+    });
+
+    // result: { code_url?: string, h5_url?: string }
+    const qrSource = result.code_url || result.h5_url || '';
+    const qrDataUrl = qrSource ? await QRCode.toDataURL(qrSource, { width: 240, margin: 1 }) : null;
+
+    res.json({
+      out_trade_no,
+      amount: product.price,
+      provider,
+      mode: 'live',
+      qr_data_url: qrDataUrl,
+      code_url: result.code_url || null,
+      h5_url: result.h5_url || null,
+    });
+  } catch (err) {
+    console.error(`[pay][${provider}] createPayment failed:`, err);
+    db.prepare("UPDATE orders SET status = 'failed' WHERE out_trade_no = ?").run(out_trade_no);
+    res.status(500).json({ error: err.message || '下单失败' });
+  }
+});
+
+app.get('/api/orders/:out_trade_no', (req, res) => {
+  const order = db
+    .prepare(
+      `SELECT out_trade_no, product_id, amount, provider, status, provider_trade_no, created_at, paid_at
+       FROM orders WHERE out_trade_no = ?`
+    )
+    .get(req.params.out_trade_no);
+  if (!order) return res.status(404).json({ error: '订单不存在' });
+  res.json(order);
+});
+
+// ---- mock 支付（PAY_MODE=mock 下给二维码指向的页面用）----
+app.get('/mock-pay/:out_trade_no', (req, res) => {
+  const order = db
+    .prepare('SELECT out_trade_no, amount, status FROM orders WHERE out_trade_no = ?')
+    .get(req.params.out_trade_no);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  if (!order) return res.status(404).send('<p>订单不存在</p>');
+  const yuan = (order.amount / 100).toFixed(2);
+  const done = order.status === 'paid';
+  res.send(`<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>模拟支付</title>
+<style>
+  body{font-family:-apple-system,"PingFang SC",sans-serif;background:#fbf8f4;color:#1f1d1a;margin:0;padding:40px 20px;text-align:center}
+  .card{max-width:360px;margin:0 auto;background:#fff;border:1px solid #ece7df;border-radius:14px;padding:24px}
+  h1{font-size:18px;margin:0 0 8px}
+  .amt{font-size:32px;color:#c94a3d;font-weight:600;margin:16px 0}
+  .muted{color:#857f76;font-size:13px}
+  button{margin-top:16px;background:#1f1d1a;color:#fff;border:0;border-radius:10px;padding:12px 24px;font-size:15px;cursor:pointer}
+  button:disabled{opacity:.5}
+  .ok{color:#2a8a3e;font-weight:600}
+</style></head><body>
+<div class="card">
+  <h1>模拟支付（非真实扣款）</h1>
+  <p class="muted">订单号：${order.out_trade_no}</p>
+  <div class="amt">¥ ${yuan}</div>
+  ${done
+    ? '<p class="ok">✅ 该订单已支付</p>'
+    : `<button id="pay">确认模拟支付</button><p id="msg" class="muted"></p>`}
+</div>
+<script>
+  const btn=document.getElementById('pay');
+  if(btn){btn.onclick=async()=>{btn.disabled=true;
+    const r=await fetch('/api/orders/${order.out_trade_no}/mock-pay',{method:'POST'});
+    const d=await r.json();
+    document.getElementById('msg').innerHTML=r.ok?'<span class="ok">✅ 支付成功，可关闭此页面</span>':('失败：'+(d.error||''));
+    if(r.ok) btn.remove();
+  }}
+</script></body></html>`);
+});
+
+app.post('/api/orders/:out_trade_no/mock-pay', (req, res) => {
+  if (PAY_MODE !== 'mock') return res.status(403).json({ error: '非 mock 模式不可用' });
+  const order = db.prepare('SELECT status FROM orders WHERE out_trade_no = ?').get(req.params.out_trade_no);
+  if (!order) return res.status(404).json({ error: '订单不存在' });
+  if (order.status === 'paid') return res.json({ ok: true, already: true });
+  markOrderPaid(req.params.out_trade_no, 'MOCK_' + Date.now());
+  res.json({ ok: true });
+});
+
+// ---- 支付回调（生产用，凭证填好后生效）----
+// 注意：这两个 handler 用 express.raw，拿到原始 body 做签名校验。
+// mock 模式下会直接 404，不会干扰。
+app.post('/api/pay/wechat/notify', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
+  if (PAY_MODE !== 'live') return res.status(404).send('not in live mode');
+  try {
+    const verified = await verifyWeChatNotify({
+      headers: req.headers,
+      rawBody: req.body,
+    });
+    if (!verified.ok) {
+      console.warn('[wechat notify] 验签失败', verified.error);
+      return res.status(401).json({ code: 'FAIL', message: '签名校验失败' });
+    }
+    const { out_trade_no, transaction_id, trade_state } = verified;
+    if (trade_state === 'SUCCESS') {
+      const changed = markOrderPaid(out_trade_no, transaction_id);
+      console.log(`[wechat notify] ${out_trade_no} -> paid (changed=${changed})`);
+    } else {
+      console.log(`[wechat notify] ${out_trade_no} trade_state=${trade_state} (忽略)`);
+    }
+    res.json({ code: 'SUCCESS', message: 'OK' });
+  } catch (err) {
+    console.error('[wechat notify] error', err);
+    res.status(500).json({ code: 'FAIL', message: err.message });
+  }
+});
+
+app.post('/api/pay/alipay/notify', express.urlencoded({ extended: true, limit: '1mb' }), async (req, res) => {
+  if (PAY_MODE !== 'live') return res.status(404).send('not in live mode');
+  try {
+    const verified = await verifyAlipayNotify(req.body);
+    if (!verified.ok) {
+      console.warn('[alipay notify] 验签失败', verified.error);
+      return res.status(401).send('failure');
+    }
+    const { out_trade_no, trade_no, trade_status } = verified;
+    if (trade_status === 'TRADE_SUCCESS' || trade_status === 'TRADE_FINISHED') {
+      const changed = markOrderPaid(out_trade_no, trade_no);
+      console.log(`[alipay notify] ${out_trade_no} -> paid (changed=${changed})`);
+    } else {
+      console.log(`[alipay notify] ${out_trade_no} trade_status=${trade_status} (忽略)`);
+    }
+    res.send('success');
+  } catch (err) {
+    console.error('[alipay notify] error', err);
+    res.status(500).send('failure');
+  }
 });
 
 app.get('/api/products', (_req, res) => {
