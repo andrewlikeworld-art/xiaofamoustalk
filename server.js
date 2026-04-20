@@ -49,6 +49,20 @@ if (!commentCols.find((c) => c.name === 'parent_id')) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id)');
 }
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    expires_at INTEGER NOT NULL
+  );
+`);
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xiaofamous';
+const ADMIN_SESSION_TTL = 60 * 60 * 24 * 7; // 7 days
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn('⚠️  ADMIN_PASSWORD 未设置，使用默认密码 "xiaofamous"。上线前请设置环境变量。');
+}
+
 const productCount = db.prepare('SELECT COUNT(*) AS c FROM products').get().c;
 if (productCount === 0) {
   const seed = db.prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)');
@@ -109,8 +123,228 @@ const upload = multer({
   },
 });
 
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /\.csv$/i.test(file.originalname) ||
+      file.mimetype === 'text/csv' ||
+      file.mimetype === 'application/vnd.ms-excel' ||
+      file.mimetype === 'application/csv';
+    if (ok) cb(null, true);
+    else cb(new Error('请上传 .csv 文件'));
+  },
+});
+
+function parseCSV(text) {
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; continue; }
+        inQuotes = false; continue;
+      }
+      field += c; continue;
+    }
+    if (c === '"') { inQuotes = true; continue; }
+    if (c === ',') { row.push(field); field = ''; continue; }
+    if (c === '\r') continue;
+    if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+    field += c;
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((v) => v !== ''));
+}
+
 app.get('/api/me', (req, res) => {
   res.json({ userId: req.userId });
+});
+
+function adminSessionToken(req) {
+  return req.headers.cookie?.match(/(?:^|;\s*)admin_session=([^;]+)/)?.[1] || null;
+}
+
+function isAdmin(req) {
+  const token = adminSessionToken(req);
+  if (!token) return false;
+  const row = db.prepare('SELECT expires_at FROM admin_sessions WHERE token = ?').get(token);
+  if (!row) return false;
+  if (row.expires_at < Math.floor(Date.now() / 1000)) {
+    db.prepare('DELETE FROM admin_sessions WHERE token = ?').run(token);
+    return false;
+  }
+  return true;
+}
+
+function requireAdmin(req, res, next) {
+  if (!isAdmin(req)) return res.status(401).json({ error: '需要管理员登录' });
+  next();
+}
+
+app.post('/api/admin/login', (req, res) => {
+  const pw = (req.body && req.body.password) || '';
+  if (pw !== ADMIN_PASSWORD) return res.status(401).json({ error: '密码错误' });
+  const token = randomUUID();
+  const expires = Math.floor(Date.now() / 1000) + ADMIN_SESSION_TTL;
+  db.prepare('INSERT INTO admin_sessions (token, expires_at) VALUES (?,?)').run(token, expires);
+  res.setHeader(
+    'Set-Cookie',
+    `admin_session=${token}; Path=/; Max-Age=${ADMIN_SESSION_TTL}; HttpOnly; SameSite=Lax`
+  );
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  const token = adminSessionToken(req);
+  if (token) db.prepare('DELETE FROM admin_sessions WHERE token = ?').run(token);
+  res.setHeader('Set-Cookie', 'admin_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/me', (req, res) => {
+  res.json({ authenticated: isAdmin(req) });
+});
+
+function removeUploadFile(url) {
+  if (!url || !url.startsWith('/uploads/')) return;
+  const file = path.join(UPLOAD_DIR, path.basename(url));
+  if (file.startsWith(UPLOAD_DIR)) fs.promises.unlink(file).catch(() => {});
+}
+
+app.post('/api/admin/products', requireAdmin, upload.single('image'), (req, res) => {
+  const name = (req.body.name || '').trim().slice(0, 80);
+  const description = (req.body.description || '').trim().slice(0, 2000);
+  const imageUrl = (req.body.image_url || '').trim();
+  const uploaded = req.file ? `/uploads/${req.file.filename}` : null;
+  const image = uploaded || imageUrl;
+  if (!name) return res.status(400).json({ error: '请填写产品名称' });
+  if (!description) return res.status(400).json({ error: '请填写产品描述' });
+  if (!image) return res.status(400).json({ error: '请上传图片或填写图片链接' });
+
+  const info = db
+    .prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)')
+    .run(name, image, description);
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
+  res.status(201).json(product);
+});
+
+app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), (req, res) => {
+  const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  const name = (req.body.name || '').trim().slice(0, 80);
+  const description = (req.body.description || '').trim().slice(0, 2000);
+  const imageUrl = (req.body.image_url || '').trim();
+  const uploaded = req.file ? `/uploads/${req.file.filename}` : null;
+  const image = uploaded || imageUrl || existing.image;
+  if (!name) return res.status(400).json({ error: '请填写产品名称' });
+  if (!description) return res.status(400).json({ error: '请填写产品描述' });
+
+  db.prepare('UPDATE products SET name = ?, description = ?, image = ? WHERE id = ?')
+    .run(name, description, image, req.params.id);
+
+  if (image !== existing.image) removeUploadFile(existing.image);
+
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+  res.json(product);
+});
+
+app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
+  const existing = db.prepare('SELECT image FROM products WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  const commentImages = db
+    .prepare('SELECT image FROM comments WHERE product_id = ? AND image IS NOT NULL')
+    .all(req.params.id)
+    .map((r) => r.image);
+
+  db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
+
+  removeUploadFile(existing.image);
+  for (const url of commentImages) removeUploadFile(url);
+
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/products/template.csv', requireAdmin, (_req, res) => {
+  const csv =
+    'name,description,image_url\n' +
+    '"晨曦白瓷马克杯","手工烧制的骨瓷马克杯，杯口薄如蝉翼。若描述里包含逗号或换行，记得整个字段用双引号包起来","https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=800&q=80"\n' +
+    '"手冲滴滤壶","细口壶嘴精确控制水流。描述里要写双引号请写成两个""这样""","https://images.unsplash.com/photo-1442550528053-c431ecb55509?w=800&q=80"\n';
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="products_template.csv"');
+  res.send('\ufeff' + csv);
+});
+
+app.post('/api/admin/products/import', requireAdmin, csvUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '请上传 CSV 文件' });
+
+  let matrix;
+  try {
+    matrix = parseCSV(req.file.buffer.toString('utf-8'));
+  } catch (e) {
+    return res.status(400).json({ error: 'CSV 解析失败：' + e.message });
+  }
+  if (matrix.length < 2) return res.status(400).json({ error: 'CSV 为空或缺少数据行' });
+
+  const headers = matrix[0].map((h) => h.trim().toLowerCase());
+  const required = ['name', 'description', 'image_url'];
+  const missing = required.filter((k) => !headers.includes(k));
+  if (missing.length) return res.status(400).json({ error: `CSV 缺少列：${missing.join(', ')}` });
+
+  const idx = {
+    name: headers.indexOf('name'),
+    description: headers.indexOf('description'),
+    image_url: headers.indexOf('image_url'),
+  };
+
+  const findByName = db.prepare('SELECT id FROM products WHERE name = ?');
+  const updateStmt = db.prepare('UPDATE products SET description = ?, image = ? WHERE id = ?');
+  const insertStmt = db.prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)');
+
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+  const errors = [];
+
+  const run = db.transaction(() => {
+    for (let i = 1; i < matrix.length; i++) {
+      const r = matrix[i];
+      const name = (r[idx.name] || '').trim().slice(0, 80);
+      const description = (r[idx.description] || '').trim().slice(0, 2000);
+      const image = (r[idx.image_url] || '').trim();
+      if (!name || !description || !image) {
+        failed++;
+        errors.push({ row: i + 1, error: '缺少 name/description/image_url' });
+        continue;
+      }
+      try {
+        const existing = findByName.get(name);
+        if (existing) {
+          updateStmt.run(description, image, existing.id);
+          updated++;
+        } else {
+          insertStmt.run(name, image, description);
+          created++;
+        }
+      } catch (e) {
+        failed++;
+        errors.push({ row: i + 1, error: e.message });
+      }
+    }
+  });
+  run();
+
+  res.json({ created, updated, failed, total: matrix.length - 1, errors: errors.slice(0, 20) });
+});
+
+app.get('/admin', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 app.get('/api/products', (_req, res) => {

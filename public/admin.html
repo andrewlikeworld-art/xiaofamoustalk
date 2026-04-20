@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>管理后台 · Xiaofamous Talk</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a href="/" class="logo">
+          <span class="logo-dot"></span>
+          <span>xiaofamous<em>·talk</em></span>
+        </a>
+        <nav>
+          <span class="admin-tag">管理后台</span>
+          <a class="subtle" href="/">← 返回网站</a>
+          <button id="logout-btn" class="hidden link-btn" type="button">退出登录</button>
+        </nav>
+      </div>
+    </header>
+
+    <main id="admin-main" class="wrap">
+      <section id="login-view" class="login-card hidden">
+        <h1>管理员登录</h1>
+        <p class="muted">请输入管理员密码进入后台。</p>
+        <form id="login-form">
+          <input type="password" name="password" placeholder="管理员密码" autocomplete="current-password" required />
+          <button type="submit">登录</button>
+        </form>
+        <p id="login-error" class="form-error hidden"></p>
+      </section>
+
+      <section id="dashboard-view" class="hidden">
+        <div class="admin-header">
+          <h1>产品管理</h1>
+          <button id="new-product-btn" class="submit-btn" type="button">+ 新增产品</button>
+        </div>
+
+        <div id="product-form-wrap" class="hidden">
+          <form id="product-form" class="comment-form" enctype="multipart/form-data">
+            <h2 id="form-title">新增产品</h2>
+            <label class="field">
+              <span>产品名称</span>
+              <input type="text" name="name" maxlength="80" required placeholder="比如：手冲滴滤壶" />
+            </label>
+            <label class="field">
+              <span>产品描述</span>
+              <textarea name="description" maxlength="2000" required placeholder="介绍材质、用法、故事……"></textarea>
+            </label>
+            <label class="field">
+              <span>产品图片（上传）</span>
+              <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp" />
+            </label>
+            <label class="field">
+              <span>或填写图片链接 (URL)</span>
+              <input type="url" name="image_url" placeholder="https://..." />
+            </label>
+            <div class="current-image hidden">
+              <span class="muted">当前图片：</span>
+              <img alt="" />
+            </div>
+            <div class="form-row">
+              <button type="button" id="form-cancel" class="link-btn">取消</button>
+              <button type="submit" class="submit-btn">保存</button>
+            </div>
+            <p id="form-error" class="form-error hidden"></p>
+          </form>
+        </div>
+
+        <div class="import-card">
+          <div class="import-head">
+            <h2>CSV 批量导入产品</h2>
+            <a id="template-link" href="/api/admin/products/template.csv" class="link-btn">下载 CSV 模板</a>
+          </div>
+          <p class="muted">按 <code>name</code>、<code>description</code>、<code>image_url</code> 三列填写。同名产品会被 <b>更新</b>，新名字会被 <b>新增</b>。最大 2MB。</p>
+          <form id="import-form">
+            <input type="file" name="file" accept=".csv,text/csv" required />
+            <button type="submit" class="submit-btn">导入</button>
+          </form>
+          <div id="import-result" class="hidden"></div>
+        </div>
+
+        <div id="product-list" class="admin-list"></div>
+      </section>
+    </main>
+
+    <script src="/admin.js" type="module"></script>
+  </body>
+</html>

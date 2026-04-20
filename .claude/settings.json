@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/admin)",
+      "Bash(curl -s -c /tmp/admin-cookie.txt -X POST http://localhost:3000/api/admin/login -H 'Content-Type: application/json' -d '{\"password\":\"xiaofamous\"}')",
+      "Bash(curl -s -b /tmp/admin-cookie.txt http://localhost:3000/api/admin/products/template.csv)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s -b /tmp/admin-cookie.txt -X DELETE http://localhost:3000/api/admin/products/6)",
+      "Bash(curl -s -b /tmp/admin-cookie.txt -X DELETE http://localhost:3000/api/admin/products/7)",
+      "Bash(rm -f /tmp/test-import.csv /tmp/bad.csv /tmp/empty.csv /tmp/not.txt)",
+      "Bash(openssl rand *)",
+      "Bash(mkdir -p /home/andrew/.config/systemd/user)",
+      "Read(//home/andrew/.config/systemd/user/**)",
+      "Bash(systemctl --user daemon-reload)",
+      "Bash(systemctl --user enable --now xiaofamoustalk.service)",
+      "Bash(systemctl --user status xiaofamoustalk.service --no-pager -l)",
+      "Bash(curl -s -X POST http://localhost:3000/api/admin/login -H \"Content-Type: application/json\" -d '{\"password\":\"xiaofamous\"}')",
+      "Bash(curl -s -X POST http://localhost:3000/api/admin/login -H \"Content-Type: application/json\" -d '{\"password\":\"0B0hk3kpFeX1co4UFKes\"}')"
+    ],
+    "additionalDirectories": [
+      "/home/andrew/.config/systemd/user"
+    ]
+  }
+}
