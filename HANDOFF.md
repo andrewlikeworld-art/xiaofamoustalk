@@ -1,10 +1,12 @@
 # Xiaofamous Talk · 交接文档
 
-> 最后更新：2026-04-20
+> 最后更新：2026-04-21
 > 仓库：`/home/andrew/xiaofamoustalk`
 > 技术栈：Node.js (Express) + better-sqlite3 + 原生 JS 前端（无构建）
 
 ---
+
+> ⚠️ **接手 AI 必读** — 数据库已从项目目录**搬到** `/data/xiaofamous/data.sqlite`。切勿在代码里写回 `./data.sqlite`。项目根下那个 `data.sqlite*` 是迁移前的旧副本，保留作回滚点，**不是**线上库。详情见 §13。
 
 ## 1. 已完成的功能
 
@@ -31,6 +33,9 @@
 ### 基础设施
 - `systemd --user` 服务跑应用，已 `enable --now`，linger 已开，重启后自动起
 - 密码 / 端口通过 `.env` 注入，已从源码剥离
+- **DB 已独立于项目目录**，在 `/data/xiaofamous/data.sqlite`（见 §13）
+- 备份脚本：[scripts/backup-db.sh](scripts/backup-db.sh)，手动执行即可
+- 可选 **READ_ONLY 模式**：`READ_ONLY=true` 环境变量拉起时，SQLite 直接拒绝所有写
 
 ---
 
@@ -113,10 +118,12 @@ npm install
 
 | 路径 | 说明 |
 |---|---|
-| `/home/andrew/xiaofamoustalk/data.sqlite` | 主数据库 |
-| `/home/andrew/xiaofamoustalk/data.sqlite-shm` | SQLite WAL shared memory |
-| `/home/andrew/xiaofamoustalk/data.sqlite-wal` | SQLite WAL（含未合并的写入，不能漏） |
+| `/data/xiaofamous/data.sqlite` | **主数据库（线上生效的那个）** |
+| `/data/xiaofamous/data.sqlite-shm` | SQLite WAL shared memory |
+| `/data/xiaofamous/data.sqlite-wal` | SQLite WAL（含未合并的写入，不能漏） |
+| `/data/xiaofamous/backups/` | `scripts/backup-db.sh` 的输出位置 |
 | `/home/andrew/xiaofamoustalk/uploads/` | 用户 / 员工上传的所有图片 |
+| ~~`/home/andrew/xiaofamoustalk/data.sqlite*`~~ | **迁移前旧副本**，保留作回滚点，**不是**现役 DB |
 
 **备份 3 个 sqlite 文件要一起备份**，或用 `sqlite3 data.sqlite ".backup /path/to/backup.sqlite"` 原子备份成单文件。
 
@@ -134,19 +141,27 @@ npm install
 - `server.log` — 可重建
 - `data.sqlite-shm` 严格说可省略（但最好一起带上）
 
-### 最简备份脚本
+### 手动备份（已做）
 
 ```bash
-# 放到 crontab：每天凌晨 3 点备份到 ~/backups
 cd /home/andrew/xiaofamoustalk
-mkdir -p ~/backups/xft
-TS=$(date +%Y%m%d-%H%M%S)
-sqlite3 data.sqlite ".backup ~/backups/xft/data-$TS.sqlite"
-tar czf ~/backups/xft/uploads-$TS.tar.gz uploads/
-# 保留最近 30 份
-ls -t ~/backups/xft/data-*.sqlite  | tail -n +31 | xargs -r rm
-ls -t ~/backups/xft/uploads-*.tar.gz | tail -n +31 | xargs -r rm
+./scripts/backup-db.sh
+# 输出 /data/xiaofamous/backups/data-YYYYMMDD-HHMMSS.sqlite
+# 自动 integrity_check、保留最近 30 份；底层用 sqlite3 .backup（服务在跑也安全）
 ```
+
+要改保留份数或输出目录：`KEEP=60 BACKUP_DIR=/path ./scripts/backup-db.sh`
+
+### 推荐加 cron（还没加）
+
+```bash
+# crontab -e，每天凌晨 3 点
+0 3 * * * /home/andrew/xiaofamoustalk/scripts/backup-db.sh >> /home/andrew/xiaofamoustalk/server.log 2>&1
+# uploads/ 也要备（脚本没覆盖，单独做）
+15 3 * * * tar czf /data/xiaofamous/backups/uploads-$(date +\%Y\%m\%d).tar.gz -C /home/andrew/xiaofamoustalk uploads/
+```
+
+**长期：只本机备份等于没备份**——盘坏就全没。务必 rsync 到另一台机 / S3。
 
 ---
 
@@ -322,7 +337,110 @@ curl -X POST http://localhost:3000/api/admin/login \
 
 ---
 
-## 12. 版本日志
+## 12. 数据库迁出项目目录（2026-04-21）
+
+### 动机
+- 防止 `git clean` / 误 `rm -rf` / 部署脚本意外覆盖生产数据
+- 让 DB 和代码的生命周期彻底解耦：代码可随意 reset，数据不受影响
+- 未来可挂独立盘 / 独立快照到 `/data/xiaofamous/`
+
+### 新路径
+```
+/data/xiaofamous/
+├── data.sqlite           ← 主库（现役）
+├── data.sqlite-shm       ← WAL shared memory
+├── data.sqlite-wal       ← WAL（未合并的写入都在这儿，备份时必须一起带）
+└── backups/
+    └── data-YYYYMMDD-HHMMSS.sqlite   ← scripts/backup-db.sh 的输出
+```
+
+目录所有者：`andrew:andrew`，权限 `755`。`/data` 本身由 root 拥有，迁移时靠 `sudo mkdir` + `sudo chown` 建起来。
+
+### server.js 的关键改动（[server.js:15](server.js#L15) 起）
+```js
+const DB_PATH = process.env.DB_PATH || '/data/xiaofamous/data.sqlite';
+const READ_ONLY = process.env.READ_ONLY === 'true';
+
+if (!fs.existsSync(DB_PATH)) {
+  console.error(`❌ 数据库文件不存在: ${DB_PATH}`);
+  console.error('   拒绝启动，以免创建空库覆盖生产数据。');
+  process.exit(1);
+}
+
+const db = new Database(DB_PATH, { readonly: READ_ONLY });
+```
+
+三个保护：
+1. **默认绝对路径**，绕开 `WorkingDirectory`，部署脚本/git 操作无法碰到
+2. **DB 文件不在就 exit(1)**——不会偷偷建个空库覆盖线上
+3. **READ_ONLY 模式**：`READ_ONLY=true` 拉起时，`CREATE TABLE IF NOT EXISTS` / seed / `ALTER` 全跳过，DB 以 `{readonly: true}` 打开，写请求被 SQLite 硬拒
+
+**没有改任何 API、没有新增 ALTER、没有 DROP。**`CREATE TABLE IF NOT EXISTS` 和 `ALTER ADD COLUMN`（受 `PRAGMA table_info` 检查保护）都是既有代码，对已有生产库均为 no-op。
+
+### 迁移步骤（已完成，留档以便复盘）
+```bash
+# 1. 建目录（需要 root）
+sudo mkdir -p /data/xiaofamous/backups
+sudo chown -R andrew:andrew /data/xiaofamous
+
+# 2. 停服（防止写入期间快照不一致）
+systemctl --user stop xiaofamoustalk.service
+
+# 3. 原子快照（sqlite3 .backup 会把 WAL 里未合并的写入一起带过去）
+sqlite3 /home/andrew/xiaofamoustalk/data.sqlite \
+  ".backup '/data/xiaofamous/data.sqlite'"
+
+# 4. 校验
+sqlite3 /data/xiaofamous/data.sqlite "PRAGMA integrity_check;"   # → ok
+# 各表行数对比：products=3, comments=1, likes=0, admin_sessions=7, orders=5（迁移前后一致）
+
+# 5. 重启
+systemctl --user start xiaofamoustalk.service
+curl -s http://localhost:3000/api/products | jq 'length'   # → 3
+```
+
+⚠️ **不要用 `cp data.sqlite /data/xiaofamous/`**——WAL 里 600KB 未合并写入会丢。
+
+### 旧 DB 文件
+`/home/andrew/xiaofamoustalk/data.sqlite*` **原地保留**作为回滚点，未删除。确认新路径稳定运行一段时间（比如一周）后可人工删除：
+```bash
+rm /home/andrew/xiaofamoustalk/data.sqlite{,-shm,-wal}
+```
+
+### 回滚预案
+- **代码回滚**：`git checkout pre-db-migration`（这个 tag 是 `1cd142a`，DB 搬家前的最后一版，已 push 到 GitHub）
+- **数据回滚**：停服 → `sqlite3 /data/xiaofamous/data.sqlite ".backup '/some/safe/path.sqlite'"` 先备当前 → 再把想要的备份 `cp` 回 `/data/xiaofamous/data.sqlite`（务必连 `-shm` `-wal` 一起换，或 `rm` 掉 `-shm` `-wal` 让 SQLite 重建）→ 起服
+
+### 备份脚本
+[scripts/backup-db.sh](scripts/backup-db.sh)：`sqlite3 .backup` + `integrity_check` + 保留最近 30 份。执行即用，已在 §5 给出 cron 范例（cron 还没接，**下一个接手建议先接上**）。
+
+### 仍未做（建议下一个接手优先处理）
+1. 接 cron：自动每日备份 + uploads/ 一起打包
+2. 异地备份：rsync 到另一台机或 S3，否则盘坏就全没
+3. 删项目根下的旧 `data.sqlite*`（至少观察一周后）
+
+---
+
+## 13. 版本日志
+
+### 2026-04-21 · DB 搬家 + 备份脚本
+
+**新增**
+- DB 文件从项目根搬到 `/data/xiaofamous/data.sqlite`（详情见 §13）
+- [server.js](server.js) `DB_PATH` 可由环境变量注入，默认绝对路径；DB 不存在即拒启动
+- `READ_ONLY=true` 环境开关（只读副本场景，SQLite 层硬拒所有写）
+- 新增 [scripts/backup-db.sh](scripts/backup-db.sh)：手动一致快照 + 保留最近 30 份
+- [.env.example](.env.example) 增加 `DB_PATH` / `READ_ONLY` 段落
+- GitHub 上打了 tag **`pre-db-migration`** → `1cd142a`（搬家前的最后一版，回滚用）
+
+**没做**
+- 没改任何 API；没加 `ALTER`；没加 `DROP`；没重建 schema；不会覆盖已有数据
+- cron 自动备份没接（脚本是手动）
+- uploads/ 的周期备份没做
+
+**风险 / 注意**
+- `/data` 目录所有者是 root，**重做机器时**记得先 `sudo mkdir /data && sudo chown andrew /data/xiaofamous`
+- 项目根下仍有旧 `data.sqlite*`，是**旧副本**不是线上库，不要被它迷惑
 
 ### 2026-04-20 · 支付骨架（mock 可跑通）
 

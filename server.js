@@ -12,11 +12,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const db = new Database(path.join(__dirname, 'data.sqlite'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const DB_PATH = process.env.DB_PATH || '/data/xiaofamous/data.sqlite';
+const READ_ONLY = process.env.READ_ONLY === 'true';
 
-db.exec(`
+if (!fs.existsSync(DB_PATH)) {
+  console.error(`❌ 数据库文件不存在: ${DB_PATH}`);
+  console.error('   拒绝启动，以免创建空库覆盖生产数据。');
+  console.error('   首次初始化请手动放置/迁移数据库文件后再启动。');
+  process.exit(1);
+}
+
+const db = new Database(DB_PATH, { readonly: READ_ONLY });
+if (!READ_ONLY) db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+if (READ_ONLY) console.warn('🔒 READ_ONLY 模式：所有写请求会被 SQLite 拒绝');
+
+if (!READ_ONLY) {
+  db.exec(`
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -83,6 +95,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_id);
   CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 `);
+}
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'xiaofamous';
 const ADMIN_SESSION_TTL = 60 * 60 * 24 * 7; // 7 days
@@ -100,6 +113,7 @@ if (PAY_MODE === 'mock') {
   console.log('💳 支付模式：live');
 }
 
+if (!READ_ONLY) {
 const productCount = db.prepare('SELECT COUNT(*) AS c FROM products').get().c;
 if (productCount === 0) {
   const seed = db.prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)');
@@ -127,6 +141,7 @@ if (productCount === 0) {
   ];
   const tx = db.transaction((rows) => rows.forEach((r) => seed.run(r.name, r.image, r.description)));
   tx(items);
+}
 }
 
 const app = express();
