@@ -176,22 +176,25 @@ cd /home/andrew/xiaofamoustalk
 | 服务形态 | `systemctl --user` 服务 `xiaofamoustalk.service`（已 enable + active） |
 | 绑定地址 | `0.0.0.0:3000`（实际仅本机可达，因为机器在 NAT 后） |
 | 反向代理 | Cloudflare Tunnel（`cloudflared` systemd 服务） |
-| 公网可访问 | **✅ 是** — `https://talk.xiaofamous.com` |
+| 公网可访问 | **✅ 是** — `https://www.xiaofamous.com`（旧 `https://talk.xiaofamous.com` 永久 301 到 www） |
 | 本机 IP | `192.168.31.65`（内网）|
 | Tailscale | 已装，IP `100.93.5.119`，DNS `workstation.tail9c7884.ts.net`，tailnet 内已可访问 `http://workstation.tail9c7884.ts.net:3000` |
-| cloudflared | ✅ 已配置，Tunnel ID `23ab4493-4b88-43bd-acbc-56442e39dc55`，域名 `talk.xiaofamous.com` |
+| cloudflared | ✅ 已配置，Tunnel ID `23ab4493-4b88-43bd-acbc-56442e39dc55`，域名 `www.xiaofamous.com` + `talk.xiaofamous.com`（talk 仅保留做 301 兼容） |
 | 机器开机自启 | ✅（linger 已开）|
 
 ### 公网访问（已启用）
 
-**方案：Cloudflare Tunnel**（2026-04-20 启用）
+**方案：Cloudflare Tunnel**（2026-04-20 启用，2026-04-22 迁到 www）
 
-- 公网地址：`https://talk.xiaofamous.com`
+- 公网地址：`https://www.xiaofamous.com`
+- 旧地址：`https://talk.xiaofamous.com` —— 在 Node 层 301 永久跳转到 www（[server.js:163](server.js#L163) 一带的中间件）；老链接、已经配出去的支付回调都兼容
 - Tunnel ID：`23ab4493-4b88-43bd-acbc-56442e39dc55`
-- 配置文件：`/home/andrew/.cloudflared/config.yml`
+- 配置文件：`/etc/cloudflared/config.yml`（`cloudflared.service` 实际启动参数指向这里）
 - 凭证文件：`/home/andrew/.cloudflared/23ab4493-4b88-43bd-acbc-56442e39dc55.json`
 - 证书文件：`/home/andrew/.cloudflared/cert.pem`
 - systemd 服务：`cloudflared.service`（系统级，非 user 级）
+
+**⚠️ CF 边缘路径屏蔽**：`/etc/cloudflared/config.yml` 的 ingress 里,`www` 和 `talk` 两家 hostname 都对 `^/(admin|api/admin)(/.*)?$` 返 `http_status:404`。意味着 **admin 后台和 `/api/admin/*` 只能走 Tailscale / 局域网 / localhost**,CF 侧根本打不进来。支付回调 `/api/pay/*/notify` 路径不匹配,正常转发。
 
 ```bash
 # 管理 tunnel 服务
@@ -202,22 +205,23 @@ sudo journalctl -u cloudflared -f
 
 备选方案（未启用）：Tailscale Funnel / Tailscale Serve，如需切换见旧版文档。
 
-### 管理员上传走 Tailscale 直连（推荐）
+### 管理员访问只走 Tailscale / 局域网 / localhost
 
-公网上传要经 Cloudflare Tunnel 转回本机，实测 ~170 KB/s。管理员在 tailnet 内建议绕开 CF：
+2026-04-22 起,CF 边缘对 `/admin` 和 `/api/admin/*` 直接返 404(见上一段)。admin 不再通过公网可达:
 
-| 场景 | URL |
-|---|---|
-| Tailscale 直连（推荐） | `http://100.93.5.119:3000/admin` |
-| 内网直连（同一 Wi-Fi） | `http://192.168.31.65:3000/admin` |
-| Tailscale DNS 名 | `http://workstation.tail9c7884.ts.net:3000/admin` |
-| 公网（慢） | `https://talk.xiaofamous.com/admin` |
+| 场景 | URL | 状态 |
+|---|---|---|
+| Tailscale 直连(推荐) | `http://100.93.5.119:3000/admin` | ✅ |
+| 内网直连(同一 Wi-Fi) | `http://192.168.31.65:3000/admin` | ✅ |
+| Tailscale DNS 名 | `http://workstation.tail9c7884.ts.net:3000/admin` | ✅ |
+| 公网 www | `https://www.xiaofamous.com/admin` | ❌ 404(CF 边缘屏蔽) |
+| 公网 talk | `https://talk.xiaofamous.com/admin` | ❌ 404(CF 边缘屏蔽) |
 
-**验证过的现状**：server.js 没有 `trust proxy` / CORS / HTTPS 强跳；cookie 不带 `Secure`，HTTP 明文直连 OK。login + 上传都能直接用 Tailscale URL 走完。
+**验证过的现状**:server.js 没有 `trust proxy` / CORS / HTTPS 强跳;cookie 不带 `Secure`,HTTP 明文直连 OK。login + 上传都能直接用 Tailscale URL 走完。
 
-iPhone 装 Tailscale App 登录后直接打开 `http://100.93.5.119:3000/admin`，上传原生接本机磁盘，不再经过 CF 的 ~100MB 上限。
+iPhone 装 Tailscale App 登录后直接打开 `http://100.93.5.119:3000/admin`,上传原生接本机磁盘,不经过 CF 的 ~100MB 上限。
 
-admin 页面顶部加了自动提示条：当前 host 不是 tailnet / LAN 时，会提示切到 Tailscale 直连（代码在 [admin.js](public/admin.js) 顶部 IIFE）。
+admin 页面顶部有自动提示条:当前 host 不是 tailnet / LAN 时提示切到 Tailscale 直连(代码在 [admin.js](public/admin.js) 顶部 IIFE)——公网屏蔽后理论上访客根本看不到这个页面,留着作兜底提示。
 
 ---
 
@@ -345,9 +349,10 @@ curl -X POST http://localhost:3000/api/admin/login \
 2. 把证书文件放到 `/home/andrew/xiaofamoustalk/secrets/`（已 gitignore uploads/.env，建议把这个路径也 gitignore 掉）
 3. 填 [.env](.env)，把 `PAY_MODE=live`，填所有 `WECHAT_*` / `ALIPAY_*`（模板见 [.env.example](.env.example)）
 4. `systemctl --user restart xiaofamoustalk.service`
-5. 到微信商户平台 / 支付宝开放平台**配置回调 URL**：
-   - 微信：`https://talk.xiaofamous.com/api/pay/wechat/notify`
-   - 支付宝：`https://talk.xiaofamous.com/api/pay/alipay/notify`
+5. 到微信商户平台 / 支付宝开放平台**配置回调 URL**（用 `www` 不是 `talk`；talk 会 301，但支付商可能不跟 301）：
+   - 微信：`https://www.xiaofamous.com/api/pay/wechat/notify`
+   - 支付宝：`https://www.xiaofamous.com/api/pay/alipay/notify`
+   - 注意：CF 对 `/admin` 和 `/api/admin/*` 做了边缘屏蔽，但 `/api/pay/*` 不在屏蔽范围，回调正常
 6. 小金额真机测一笔
 
 ### 已知风险 / 待做
@@ -445,6 +450,35 @@ rm /home/andrew/xiaofamoustalk/data.sqlite{,-shm,-wal}
 ---
 
 ## 13. 版本日志
+
+### 2026-04-22 (深夜) · 公网域名迁到 www + admin 仅内网可达
+
+**新增**
+- 公网主入口从 `talk.xiaofamous.com` 换成 `www.xiaofamous.com`
+- [server.js](server.js) 在 `express.static` 之前加了 301 中间件：host 为 `talk.xiaofamous.com` 的请求,全部永久跳转到 `https://www.xiaofamous.com${originalUrl}`(query / path 保留)。放在 static 之前是为了让 `/` 也跳,而不是被 static 直接返 index.html
+- `/etc/cloudflared/config.yml` 加了 ingress 路径屏蔽规则:www + talk 两家 hostname 对 `^/(admin|api/admin)(/.*)?$` 统一返 `http_status:404`。admin 后台和管理 API 只能走 Tailscale / 局域网 / localhost
+- Cloudflare DNS:`www` CNAME 指向 tunnel(用 `cloudflared tunnel route dns --overwrite-dns` 把 hostname 绑到 tunnel 上)
+- HANDOFF §6 更新公网地址 + 补上 CF 边缘屏蔽说明
+- HANDOFF §11 支付回调 URL 全部改成 www(talk 会 301,但支付商不一定跟 301)
+
+**验证**
+- `curl -I https://www.xiaofamous.com/` → 200
+- `curl -I https://talk.xiaofamous.com/` → 301,Location `https://www.xiaofamous.com/`(query / admin 路径都保留)
+- `curl -I https://www.xiaofamous.com/admin` → 404(CF 边缘,未到 Node)
+- `curl -I https://talk.xiaofamous.com/admin` → 404(同上)
+- `curl -I http://localhost:3000/admin` → 200(Node 直出)
+- `curl -I http://100.93.5.119:3000/admin` → 200(Tailscale 直连)
+
+**没做**
+- `/etc/cloudflared/config.yml.bak.YYYYMMDD-HHMMSS` 有两份备份(Step 1 一次 + 屏蔽规则一次),确认稳定后可人工删
+- 老 Cloudflare Pages 项目(旧 www 静态站)已解绑自定义域名,`*.pages.dev` 还在作备份,未删
+- 没加 `app.set('trust proxy', 1)` / helmet HSTS——加的话要同步检查,不要把 admin 的局域网 HTTP 直连打坏
+
+**风险 / 注意**
+- 301 只看 `req.headers.host`,没做 https 强制:因为 CF 进来就是 https,Tailscale / localhost 是 http 直连不该强跳
+- CF 路径屏蔽是 regex 严格匹配 `^/(admin|api/admin)(/.*)?$`;将来新加敏感路径(比如 `/internal/*`)记得一起屏蔽
+- `cloudflared.service` 实际用的是 `/etc/cloudflared/config.yml`,而不是 `/home/andrew/.cloudflared/config.yml`。后者是旧遗留(历史 HANDOFF 写错了),两者存在时以 systemd 启动参数为准——备份 / 修改要认对位置
+- 删了仓库里的 `WIP_www_migration.md`(整个迁移的工作草稿,已全部落实并写进 HANDOFF)
 
 ### 2026-04-22 (晚) · 前端压缩 + 管理员 Tailscale 直连
 

@@ -158,6 +158,15 @@ if (productCount === 0) {
 
 const app = express();
 app.use(express.json());
+
+app.use((req, res, next) => {
+  const host = req.headers.host?.split(':')[0];
+  if (host === 'talk.xiaofamous.com') {
+    return res.redirect(301, `https://www.xiaofamous.com${req.originalUrl}`);
+  }
+  next();
+});
+
 app.use('/uploads', express.static(UPLOAD_DIR));
 app.use(express.static(path.join(__dirname, 'public')));
 
