@@ -11,24 +11,26 @@
 ## 1. 已完成的功能
 
 ### 公开端（面向访客）
-- 产品列表页（首页），响应式网格布局
-- 产品详情页（图片 / 名称 / 描述）
+- 产品列表页（首页），响应式网格布局（移动端强制两列）
+- **首页分类筛选条**（按产品 `category` 分组，会话级记住选中，见 §14）
+- 卡片 meta 显示 💬 评论数 / ❤️ 点赞总数
+- 产品详情页：封面图 + **最多 4 张附图（点图 lightbox）** + **视频播放器**
 - **可销售商品显示价格 + 微信/支付宝支付按钮**（见 §11）
 - 评论系统：发评论、上传图片、点赞、按"热度/最新"切换
 - 评论回复（单层嵌套，回复的回复挂到根评论下）
 - 删除自己的评论（基于 `uid` cookie 身份识别）
 - 评论数 / 排序 / 时间相对化显示
-- "关于" 占位页（`#/about`）
 
 ### 管理后台（/admin）
 - 密码登录（HttpOnly cookie + DB session，7 天过期）
 - 产品的增 / 改 / 删（单个）
-- 图片既支持上传也支持填 URL
+- **分类（带 datalist 建议）、封面图、附图（最多 4 张）、视频**均可上传或填 URL
 - **每个产品可选「开放销售」+ 价格**（见 §11 支付）
-- **CSV 批量导入**（upsert by name）：上传 CSV → 同名更新、新名字新增、返回 `created / updated / failed / errors`
+- **CSV 批量导入**（upsert by name）：上传 CSV → 同名更新、新名字新增，可选 `category` 列；返回 `created / updated / failed / errors`
 - CSV 模板下载（/api/admin/products/template.csv，带 UTF-8 BOM 便于 Excel 打开）
-- 编辑 / 删除时自动清理旧上传图片文件
+- 编辑 / 删除时自动清理旧上传文件（封面 + 附图 + 视频）
 - 订单列表 API：`GET /api/admin/orders`（目前还没做前端页面，直接 curl 查）
+- **上传无尺寸限制**（2026-04-22 起，应用层 multer 不拦），真正上限看反向代理（Cloudflare Tunnel ~100MB）
 
 ### 基础设施
 - `systemd --user` 服务跑应用，已 `enable --now`，linger 已开，重启后自动起
@@ -45,7 +47,9 @@
 - 管理员账户体系：只有单一共享密码，没有多员工账户、没有操作日志
 - 产品列表没有分页（产品多时会一次性全返回）
 - 评论也没有分页 / 懒加载
-- 没有搜索、没有产品分类 / 标签
+- 没有搜索；~~产品分类 / 标签~~ 已做基础版（单个 category，首页筛选）；标签 / 多分类 / 子分类未做
+- 附图没有单张删除 / 排序，只有"替换整组"或"清空"两种操作
+- 视频没做服务端转码 / 缩略图，播放完全依赖浏览器能力
 - 评论没有"举报 / 隐藏 / 管理员删除"
 - 没有备份任务（SQLite 和 uploads 需人工备份，见 §5）
 - 前端没有单元测试；后端没有自动化测试，只有手动 curl 烟测
@@ -273,7 +277,9 @@ curl -X POST http://localhost:3000/api/admin/login \
   ```
 - **没有 rate-limiting**：登录接口可被暴力。上线前建议加一层
 - **评论接口匿名**：任何访客可发，靠 `uid` cookie 区分"自己"。恶意访客可清 cookie 绕过"只能删自己"——但这只能删他自己那条匿名评论，不是管理员权限，影响有限
-- **上传没有 virus scan / 内容审核**：只限制了 mime 白名单（png/jpg/gif/webp）和 5MB 大小
+- **上传没有 virus scan / 内容审核**：只限制了 mime 白名单（图片 png/jpg/gif/webp、视频 mp4/webm/mov）
+- **上传无尺寸上限（2026-04-22 起）**：应用层 `multer` 已经不再限 fileSize。实际的硬上限由反向代理决定：**Cloudflare Tunnel 免费计划单请求体最大约 100MB**，超过会在 CF 层直接 413，应用这边看不到。员工若要上传大视频，要么压缩到 100MB 内，要么绕过 Cloudflare（走 Tailscale 直连 `workstation.tail9c7884.ts.net:3000`）
+- **磁盘没限额**：uploads/ 写 `/home/andrew/xiaofamoustalk/uploads/`，没做 quota。长期视频多了要盯一下盘
 - **CSV 导入不是事务+全有或全无**：现在是单事务内逐行，但一行语法错会中断整批（SQLite 层面 rollback）。当前观测：字段缺失的行被跳过不抛，只有底层 DB 错误才会 rollback 整个事务
 
 ### 待确认
@@ -422,6 +428,40 @@ rm /home/andrew/xiaofamoustalk/data.sqlite{,-shm,-wal}
 ---
 
 ## 13. 版本日志
+
+### 2026-04-22 · 分类 / 多图 / 视频 + 去掉上传尺寸限制
+
+**新增**
+- 产品表加三列（均为 `ALTER ADD COLUMN`，幂等）：
+  - `category TEXT`（+ `idx_products_category` 索引）
+  - `images TEXT`（JSON 数组，存除封面外的附图 URL，最多 4 张；DB 存字符串，API 出参已 hydrate 成数组）
+  - `video TEXT`（视频 URL，可上传或填外链）
+- 新路由：`GET /api/categories` → `[{name, count}]`；`GET /api/products?category=X` 按分类过滤
+- 首页
+  - 标题改 `小飞马🦄 · Talk`；下掉 `#/about` 路由和"关于"入口
+  - 加分类筛选条（pills，会话内用 `sessionStorage` 记当前选中）
+  - 卡片 meta 从"N 条评论 · 查看 →"改成 `💬N / ❤️N`（后端查询顺便带 `like_count`）
+  - 移动端强制两列 `@media (max-width: 720px)`
+- 详情页
+  - 附图四宫格（点图进 lightbox），`.product-media` 做纵向容器
+  - 原生 `<video controls playsinline>` 播放器，`max-height: 60vh`
+  - 标题后追加 category 胶囊
+- 管理后台
+  - 表单新增字段：分类（带 datalist 建议）、封面图、附图（最多 4 张，单次提交整组替换）、视频文件、视频 URL、两个"移除附图 / 移除视频"复选框
+  - 编辑时预览区展示当前封面 / 当前附图 / 当前视频
+  - CSV 模板 + 导入兼容 `category`（没带该列也能导入，向后兼容）
+- 上传尺寸限制**全部去掉**（评论图 5MB / 产品媒体 50MB / CSV 2MB 全部删）——应用层 multer 已不限制，真正的上限由 Cloudflare Tunnel（~100MB / 请求体）决定；管理端走 Tailscale 直连可绕过
+
+**没做**
+- 附图没有排序 / 单张删除 UI：当前"替换整组"或"一键清空"两种操作，加单张删除要多带一个保留列表字段
+- 视频没做服务端转码 / 缩略图，播放全看浏览器能力
+- 没做 uploads/ 磁盘配额告警
+- §7 里备份 cron、rate-limiting 等老项目依旧待做
+
+**风险 / 注意**
+- **CF 免费计划单请求体 ~100MB 硬上限**：员工上传大视频会在 CF 层 413，应用这边看不到日志。绕过方式：Tailscale 直连 `workstation.tail9c7884.ts.net:3000`
+- 删除产品时会清理封面 + 附图 + 视频的本地文件（外链不碰）；编辑时若替换附图整组，旧附图本地文件也会清掉
+- `images` / `video` 两列是新加的，重启服务时 `ALTER ADD COLUMN` 会自动补；老进程若没重启，前端调 `/api/categories` 会 404，页面会降级不显示分类条
 
 ### 2026-04-21 · DB 搬家 + 备份脚本
 

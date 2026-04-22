@@ -11,6 +11,10 @@ const formError = document.getElementById('form-error');
 const formCancel = document.getElementById('form-cancel');
 const listEl = document.getElementById('product-list');
 const currentImage = form.querySelector('.current-image');
+const currentExtras = form.querySelector('.current-extras');
+const extrasRow = currentExtras.querySelector('.extras-row');
+const currentVideo = form.querySelector('.current-video');
+const currentVideoEl = currentVideo.querySelector('video');
 
 let editingId = null;
 
@@ -77,10 +81,22 @@ logoutBtn.addEventListener('click', async () => {
   showLogin();
 });
 
+async function loadCategorySuggestions() {
+  const dl = document.getElementById('category-suggestions');
+  if (!dl) return;
+  try {
+    const cats = await api('/api/categories');
+    dl.innerHTML = cats.map((c) => `<option value="${escapeHtml(c.name)}"></option>`).join('');
+  } catch {
+    dl.innerHTML = '';
+  }
+}
+
 async function loadProducts() {
   listEl.innerHTML = '<p class="loading">加载中…</p>';
   try {
     const products = await api('/api/products');
+    loadCategorySuggestions();
     if (products.length === 0) {
       listEl.innerHTML = '<p class="empty">暂无产品，点击右上角新增。</p>';
       return;
@@ -92,10 +108,13 @@ async function loadProducts() {
       const priceTag = p.sellable && p.price
         ? `<span class="price-tag">¥${(p.price / 100).toFixed(2)} · 销售中</span>`
         : '<span class="off-tag">未销售</span>';
+      const catTag = p.category
+        ? `<span class="cat-tag">${escapeHtml(p.category)}</span>`
+        : '';
       row.innerHTML = `
         <div class="admin-row-img"><img src="${escapeHtml(p.image)}" alt="" /></div>
         <div class="admin-row-body">
-          <div class="admin-row-title">${escapeHtml(p.name)} ${priceTag}</div>
+          <div class="admin-row-title">${escapeHtml(p.name)} ${catTag}${priceTag}</div>
           <div class="admin-row-desc">${escapeHtml(p.description)}</div>
           <div class="admin-row-meta muted">${p.comment_count} 条评论 · #${p.id}</div>
         </div>
@@ -118,8 +137,14 @@ function openForm(product = null) {
   formTitle.textContent = product ? `编辑：${product.name}` : '新增产品';
   form.name.value = product?.name || '';
   form.description.value = product?.description || '';
+  form.category.value = product?.category || '';
   form.image_url.value = product && !product.image.startsWith('/uploads/') ? product.image : '';
   form.image.value = '';
+  form.extra_images.value = '';
+  form.video.value = '';
+  form.video_url.value = product && product.video && !product.video.startsWith('/uploads/') ? product.video : '';
+  form.remove_extras.checked = false;
+  form.remove_video.checked = false;
   form.sellable.checked = !!(product && product.sellable);
   form.price.value = product && product.price != null ? (product.price / 100).toFixed(2) : '';
   if (product) {
@@ -127,6 +152,24 @@ function openForm(product = null) {
     currentImage.querySelector('img').src = product.image;
   } else {
     currentImage.classList.add('hidden');
+  }
+  const extras = Array.isArray(product?.images) ? product.images : [];
+  if (extras.length) {
+    extrasRow.innerHTML = extras
+      .map((url) => `<img src="${escapeHtml(url)}" alt="" />`)
+      .join('');
+    currentExtras.classList.remove('hidden');
+  } else {
+    extrasRow.innerHTML = '';
+    currentExtras.classList.add('hidden');
+  }
+  if (product && product.video) {
+    currentVideoEl.src = product.video;
+    currentVideo.classList.remove('hidden');
+  } else {
+    currentVideoEl.removeAttribute('src');
+    currentVideoEl.load();
+    currentVideo.classList.add('hidden');
   }
   formError.classList.add('hidden');
   formWrap.classList.remove('hidden');
@@ -138,6 +181,12 @@ function closeForm() {
   formWrap.classList.add('hidden');
   editingId = null;
   form.reset();
+  currentImage.classList.add('hidden');
+  currentExtras.classList.add('hidden');
+  extrasRow.innerHTML = '';
+  currentVideo.classList.add('hidden');
+  currentVideoEl.removeAttribute('src');
+  currentVideoEl.load();
   formError.classList.add('hidden');
 }
 
@@ -150,15 +199,21 @@ form.addEventListener('submit', async (e) => {
 
   const name = form.name.value.trim();
   const description = form.description.value.trim();
+  const category = form.category.value.trim();
   const file = form.image.files?.[0];
   const imageUrl = form.image_url.value.trim();
+  const extraFiles = Array.from(form.extra_images.files || []);
+  const videoFile = form.video.files?.[0];
+  const videoUrl = form.video_url.value.trim();
+  const removeExtras = form.remove_extras.checked;
+  const removeVideo = form.remove_video.checked;
   const sellable = form.sellable.checked;
   const priceStr = form.price.value.trim();
 
   if (!name) return showFormError('请填写产品名称');
   if (!description) return showFormError('请填写产品描述');
-  if (!editingId && !file && !imageUrl) return showFormError('请上传图片或填写图片链接');
-  if (file && file.size > 5 * 1024 * 1024) return showFormError('图片不能超过 5MB');
+  if (!editingId && !file && !imageUrl) return showFormError('请上传封面图或填写图片链接');
+  if (extraFiles.length > 4) return showFormError('其他图片最多 4 张');
   if (sellable) {
     const p = Number(priceStr);
     if (!priceStr || !Number.isFinite(p) || p <= 0) return showFormError('开启销售时请填写价格');
@@ -167,8 +222,14 @@ form.addEventListener('submit', async (e) => {
   const fd = new FormData();
   fd.append('name', name);
   fd.append('description', description);
+  fd.append('category', category); // 空串 = 清空分类
   if (file) fd.append('image', file);
   if (imageUrl) fd.append('image_url', imageUrl);
+  for (const f of extraFiles) fd.append('extra_images', f);
+  if (videoFile) fd.append('video', videoFile);
+  if (videoUrl) fd.append('video_url', videoUrl);
+  if (removeExtras) fd.append('remove_extras', '1');
+  if (removeVideo) fd.append('remove_video', '1');
   fd.append('sellable', sellable ? '1' : '0');
   if (priceStr) fd.append('price', priceStr);
 

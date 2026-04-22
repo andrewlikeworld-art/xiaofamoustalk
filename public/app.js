@@ -2,6 +2,7 @@ const app = document.getElementById('app');
 
 const USERNAME_KEY = 'xft.username';
 const SORT_KEY = 'xft.sort';
+const CATEGORY_KEY = 'xft.cat';
 
 function getUsername() {
   return localStorage.getItem(USERNAME_KEY) || '';
@@ -56,19 +57,49 @@ function showLightbox(src) {
   document.body.appendChild(box);
 }
 
-async function renderHome() {
-  app.innerHTML = `
-    <section class="hero">
-      <h1>小有名气 · Talk</h1>
-      <p>一个轻巧的产品聊天站——看看我们挑的东西，留下你真实的想法。图片、吐槽、夸奖都欢迎。</p>
-    </section>
-    <div class="product-grid" id="grid"><div class="loading">加载中…</div></div>
-  `;
+function getCategory() {
+  return sessionStorage.getItem(CATEGORY_KEY) || '';
+}
+function setCategory(v) {
+  if (v) sessionStorage.setItem(CATEGORY_KEY, v);
+  else sessionStorage.removeItem(CATEGORY_KEY);
+}
+
+function renderCategoryBar(categories, active) {
+  const bar = document.getElementById('category-bar');
+  if (!bar) return;
+  if (!categories.length) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+  const all = `<button type="button" class="cat-pill ${active ? '' : 'active'}" data-cat="">全部</button>`;
+  const rest = categories
+    .map((c) =>
+      `<button type="button" class="cat-pill ${active === c.name ? 'active' : ''}" data-cat="${escapeHtml(c.name)}">${escapeHtml(c.name)}</button>`
+    )
+    .join('');
+  bar.innerHTML = all + rest;
+  bar.querySelectorAll('.cat-pill').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.cat;
+      if (v === getCategory()) return;
+      setCategory(v);
+      loadProductGrid(v);
+      bar.querySelectorAll('.cat-pill').forEach((b) => b.classList.toggle('active', b.dataset.cat === v));
+    });
+  });
+}
+
+async function loadProductGrid(category) {
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="loading">加载中…</div>';
   try {
-    const products = await api('/api/products');
-    const grid = document.getElementById('grid');
+    const qs = category ? `?category=${encodeURIComponent(category)}` : '';
+    const products = await api(`/api/products${qs}`);
     if (products.length === 0) {
-      grid.innerHTML = '<p class="empty">还没有产品</p>';
+      grid.innerHTML = '<p class="empty">这个分类下暂无产品</p>';
       return;
     }
     const tpl = document.getElementById('tpl-product-card');
@@ -80,7 +111,8 @@ async function renderHome() {
       node.querySelector('img').alt = p.name;
       node.querySelector('.product-name').textContent = p.name;
       node.querySelector('.product-desc').textContent = p.description;
-      node.querySelector('.meta-comments').textContent = `${p.comment_count} 条评论`;
+      node.querySelector('.meta-comments-n').textContent = p.comment_count || 0;
+      node.querySelector('.meta-likes-n').textContent = p.like_count || 0;
       if (p.sellable && p.price) {
         const tag = document.createElement('span');
         tag.className = 'card-price';
@@ -90,17 +122,27 @@ async function renderHome() {
       grid.appendChild(node);
     }
   } catch (err) {
-    app.innerHTML = `<p class="empty">加载失败：${escapeHtml(err.message)}</p>`;
+    grid.innerHTML = `<p class="empty">加载失败：${escapeHtml(err.message)}</p>`;
   }
 }
 
-async function renderAbout() {
+async function renderHome() {
+  const active = getCategory();
   app.innerHTML = `
     <section class="hero">
-      <h1>关于 Talk</h1>
-      <p>Talk 是 xiaofamous 的实验性评论区。一个产品一页，评论区支持图片、点赞、按热度排序。留下你觉得好玩的那一句话就够了。</p>
+      <h1>小飞马🦄 · Talk</h1>
+      <p>一个轻巧的产品聊天站——看看我们挑的东西，留下你真实的想法。图片、吐槽、夸奖都欢迎。</p>
     </section>
+    <div class="category-bar hidden" id="category-bar"></div>
+    <div class="product-grid" id="grid"><div class="loading">加载中…</div></div>
   `;
+  try {
+    const [categories] = await Promise.all([api('/api/categories')]);
+    renderCategoryBar(categories, active);
+    await loadProductGrid(active);
+  } catch (err) {
+    app.innerHTML = `<p class="empty">加载失败：${escapeHtml(err.message)}</p>`;
+  }
 }
 
 function attachReplyForm(parentId, commentNode, onSubmitted) {
@@ -255,12 +297,29 @@ async function renderProduct(id) {
        </div>`
     : '';
 
+  const extras = Array.isArray(product.images) ? product.images : [];
+  const extrasBlock = extras.length
+    ? `<div class="product-extras">${extras
+        .map((url) => `<img src="${escapeHtml(url)}" alt="" data-full="${escapeHtml(url)}" />`)
+        .join('')}</div>`
+    : '';
+  const videoBlock = product.video
+    ? `<div class="product-video-box"><video controls playsinline preload="metadata" src="${escapeHtml(product.video)}"></video></div>`
+    : '';
+  const categoryTag = product.category
+    ? `<span class="detail-cat-tag">${escapeHtml(product.category)}</span>`
+    : '';
+
   app.innerHTML = `
     <a class="back-link" href="#/">← 返回全部产品</a>
     <section class="product-page">
-      <div class="product-hero-img"><img alt="${escapeHtml(product.name)}" src="${escapeHtml(product.image)}" /></div>
+      <div class="product-media">
+        <div class="product-hero-img"><img alt="${escapeHtml(product.name)}" src="${escapeHtml(product.image)}" data-full="${escapeHtml(product.image)}" /></div>
+        ${extrasBlock}
+        ${videoBlock}
+      </div>
       <div class="product-detail">
-        <h1>${escapeHtml(product.name)}</h1>
+        <h1>${escapeHtml(product.name)} ${categoryTag}</h1>
         <p>${escapeHtml(product.description)}</p>
         ${priceBlock}
       </div>
@@ -298,6 +357,10 @@ async function renderProduct(id) {
     </section>
   `;
 
+  document.querySelectorAll('.product-media img[data-full]').forEach((img) => {
+    img.addEventListener('click', () => showLightbox(img.dataset.full));
+  });
+
   const list = document.getElementById('comments-list');
   if (comments.length === 0) {
     list.innerHTML = '<p class="empty">还没有评论，来做第一个。</p>';
@@ -330,12 +393,6 @@ async function renderProduct(id) {
     const f = fileInput.files?.[0];
     if (!f) {
       filePreview.classList.add('hidden');
-      return;
-    }
-    if (f.size > 5 * 1024 * 1024) {
-      fileInput.value = '';
-      errorEl.textContent = '图片不能超过 5MB';
-      errorEl.classList.remove('hidden');
       return;
     }
     fileThumb.src = URL.createObjectURL(f);
@@ -473,7 +530,6 @@ function route() {
   const hash = location.hash || '#/';
   const m = hash.match(/^#\/product\/(\d+)/);
   if (m) return renderProduct(m[1]);
-  if (hash === '#/about') return renderAbout();
   return renderHome();
 }
 

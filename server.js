@@ -71,6 +71,18 @@ if (!productCols.find((c) => c.name === 'price')) {
   // price stored as integer 分 (cents) to avoid floating point
   db.exec('ALTER TABLE products ADD COLUMN price INTEGER');
 }
+if (!productCols.find((c) => c.name === 'category')) {
+  db.exec('ALTER TABLE products ADD COLUMN category TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)');
+}
+if (!productCols.find((c) => c.name === 'images')) {
+  // 除封面图外的额外图片（最多 4 张），JSON 数组形式的 URL 串。NULL = 没有额外图
+  db.exec('ALTER TABLE products ADD COLUMN images TEXT');
+}
+if (!productCols.find((c) => c.name === 'video')) {
+  // 视频 URL（/uploads/xxx.mp4 或外链）。NULL = 没有视频
+  db.exec('ALTER TABLE products ADD COLUMN video TEXT');
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -168,16 +180,33 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (/^image\/(png|jpe?g|gif|webp)$/.test(file.mimetype)) cb(null, true);
     else cb(new Error('仅支持 PNG / JPG / GIF / WEBP 图片'));
   },
 });
 
+// 产品媒体上传：image（封面）+ extra_images（最多 4 张）+ video
+const productMediaUpload = multer({
+  storage,
+  fileFilter: (_req, file, cb) => {
+    if (file.fieldname === 'video') {
+      if (/^video\/(mp4|webm|quicktime|x-matroska|ogg)$/.test(file.mimetype)) cb(null, true);
+      else cb(new Error('视频仅支持 MP4 / WEBM / MOV'));
+    } else {
+      // image 或 extra_images
+      if (/^image\/(png|jpe?g|gif|webp)$/.test(file.mimetype)) cb(null, true);
+      else cb(new Error('图片仅支持 PNG / JPG / GIF / WEBP'));
+    }
+  },
+}).fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'extra_images', maxCount: 4 },
+  { name: 'video', maxCount: 1 },
+]);
+
 const csvUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ok = /\.csv$/i.test(file.originalname) ||
       file.mimetype === 'text/csv' ||
@@ -283,41 +312,104 @@ function parsePriceYuan(v) {
   return Math.round(n * 100);
 }
 
-app.post('/api/admin/products', requireAdmin, upload.single('image'), (req, res) => {
+function parseCategory(v) {
+  const s = (v || '').trim().slice(0, 40);
+  return s || null;
+}
+
+function parseImagesJson(s) {
+  if (!s) return [];
+  try {
+    const arr = JSON.parse(s);
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+// 在响应里把 images 从 JSON 串解析成数组；video 保持字符串
+function hydrateProduct(p) {
+  if (!p) return p;
+  return { ...p, images: parseImagesJson(p.images) };
+}
+
+app.post('/api/admin/products', requireAdmin, productMediaUpload, (req, res) => {
   const name = (req.body.name || '').trim().slice(0, 80);
   const description = (req.body.description || '').trim().slice(0, 2000);
   const imageUrl = (req.body.image_url || '').trim();
-  const uploaded = req.file ? `/uploads/${req.file.filename}` : null;
+  const files = req.files || {};
+  const uploaded = files.image?.[0] ? `/uploads/${files.image[0].filename}` : null;
   const image = uploaded || imageUrl;
+  const extraUrls = (files.extra_images || []).map((f) => `/uploads/${f.filename}`).slice(0, 4);
+  const videoFile = files.video?.[0] ? `/uploads/${files.video[0].filename}` : null;
+  const videoUrlField = (req.body.video_url || '').trim();
+  const video = videoFile || videoUrlField || null;
   const sellable = parseSellable(req.body.sellable);
   const price = parsePriceYuan(req.body.price);
+  const category = parseCategory(req.body.category);
   if (!name) return res.status(400).json({ error: '请填写产品名称' });
   if (!description) return res.status(400).json({ error: '请填写产品描述' });
-  if (!image) return res.status(400).json({ error: '请上传图片或填写图片链接' });
+  if (!image) return res.status(400).json({ error: '请上传封面图或填写图片链接' });
   if (Number.isNaN(price)) return res.status(400).json({ error: '价格格式有误' });
   if (sellable && (price === null || price <= 0)) {
     return res.status(400).json({ error: '开启销售时必须填写价格（单位：元）' });
   }
 
+  const imagesJson = extraUrls.length ? JSON.stringify(extraUrls) : null;
   const info = db
-    .prepare('INSERT INTO products (name, image, description, sellable, price) VALUES (?,?,?,?,?)')
-    .run(name, image, description, sellable, price);
+    .prepare(
+      'INSERT INTO products (name, image, description, sellable, price, category, images, video) VALUES (?,?,?,?,?,?,?,?)'
+    )
+    .run(name, image, description, sellable, price, category, imagesJson, video);
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
-  res.status(201).json(product);
+  res.status(201).json(hydrateProduct(product));
 });
 
-app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), (req, res) => {
+app.put('/api/admin/products/:id', requireAdmin, productMediaUpload, (req, res) => {
   const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
 
   const name = (req.body.name || '').trim().slice(0, 80);
   const description = (req.body.description || '').trim().slice(0, 2000);
   const imageUrl = (req.body.image_url || '').trim();
-  const uploaded = req.file ? `/uploads/${req.file.filename}` : null;
+  const files = req.files || {};
+  const uploaded = files.image?.[0] ? `/uploads/${files.image[0].filename}` : null;
   const image = uploaded || imageUrl || existing.image;
   const sellable = parseSellable(req.body.sellable);
   const priceParsed = parsePriceYuan(req.body.price);
   const price = priceParsed === null ? existing.price : priceParsed;
+  // 只有显式提交 category 字段时才更新；未提交时保留现值
+  const category = req.body.category !== undefined
+    ? parseCategory(req.body.category)
+    : existing.category;
+
+  // 额外图片：传了新的就整组替换；显式 remove_extras=1 清空；否则保留
+  const existingExtras = parseImagesJson(existing.images);
+  let newExtras = existingExtras;
+  let extrasToRemove = [];
+  if (files.extra_images && files.extra_images.length > 0) {
+    newExtras = files.extra_images.map((f) => `/uploads/${f.filename}`).slice(0, 4);
+    extrasToRemove = existingExtras;
+  } else if (req.body.remove_extras === '1') {
+    newExtras = [];
+    extrasToRemove = existingExtras;
+  }
+  const imagesJson = newExtras.length ? JSON.stringify(newExtras) : null;
+
+  // 视频：传了文件/URL 就替换；remove_video=1 清空；否则保留
+  let video = existing.video;
+  let videoToRemove = null;
+  if (files.video?.[0]) {
+    video = `/uploads/${files.video[0].filename}`;
+    videoToRemove = existing.video;
+  } else if ((req.body.video_url || '').trim()) {
+    video = req.body.video_url.trim();
+    videoToRemove = existing.video;
+  } else if (req.body.remove_video === '1') {
+    video = null;
+    videoToRemove = existing.video;
+  }
+
   if (!name) return res.status(400).json({ error: '请填写产品名称' });
   if (!description) return res.status(400).json({ error: '请填写产品描述' });
   if (Number.isNaN(priceParsed)) return res.status(400).json({ error: '价格格式有误' });
@@ -325,17 +417,22 @@ app.put('/api/admin/products/:id', requireAdmin, upload.single('image'), (req, r
     return res.status(400).json({ error: '开启销售时必须填写价格（单位：元）' });
   }
 
-  db.prepare('UPDATE products SET name = ?, description = ?, image = ?, sellable = ?, price = ? WHERE id = ?')
-    .run(name, description, image, sellable, price, req.params.id);
+  db.prepare(
+    'UPDATE products SET name = ?, description = ?, image = ?, sellable = ?, price = ?, category = ?, images = ?, video = ? WHERE id = ?'
+  ).run(name, description, image, sellable, price, category, imagesJson, video, req.params.id);
 
   if (image !== existing.image) removeUploadFile(existing.image);
+  for (const url of extrasToRemove) removeUploadFile(url);
+  if (videoToRemove && videoToRemove !== video) removeUploadFile(videoToRemove);
 
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-  res.json(product);
+  res.json(hydrateProduct(product));
 });
 
 app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
-  const existing = db.prepare('SELECT image FROM products WHERE id = ?').get(req.params.id);
+  const existing = db
+    .prepare('SELECT image, images, video FROM products WHERE id = ?')
+    .get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
 
   const commentImages = db
@@ -346,6 +443,8 @@ app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
 
   removeUploadFile(existing.image);
+  for (const url of parseImagesJson(existing.images)) removeUploadFile(url);
+  if (existing.video) removeUploadFile(existing.video);
   for (const url of commentImages) removeUploadFile(url);
 
   res.json({ ok: true });
@@ -353,9 +452,9 @@ app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
 
 app.get('/api/admin/products/template.csv', requireAdmin, (_req, res) => {
   const csv =
-    'name,description,image_url\n' +
-    '"晨曦白瓷马克杯","手工烧制的骨瓷马克杯，杯口薄如蝉翼。若描述里包含逗号或换行，记得整个字段用双引号包起来","https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=800&q=80"\n' +
-    '"手冲滴滤壶","细口壶嘴精确控制水流。描述里要写双引号请写成两个""这样""","https://images.unsplash.com/photo-1442550528053-c431ecb55509?w=800&q=80"\n';
+    'name,description,image_url,category\n' +
+    '"晨曦白瓷马克杯","手工烧制的骨瓷马克杯，杯口薄如蝉翼。若描述里包含逗号或换行，记得整个字段用双引号包起来","https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=800&q=80","杯具"\n' +
+    '"手冲滴滤壶","细口壶嘴精确控制水流。描述里要写双引号请写成两个""这样""","https://images.unsplash.com/photo-1442550528053-c431ecb55509?w=800&q=80",""\n';
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="products_template.csv"');
   res.send('\ufeff' + csv);
@@ -381,11 +480,14 @@ app.post('/api/admin/products/import', requireAdmin, csvUpload.single('file'), (
     name: headers.indexOf('name'),
     description: headers.indexOf('description'),
     image_url: headers.indexOf('image_url'),
+    category: headers.indexOf('category'), // -1 when column absent (向后兼容)
   };
 
   const findByName = db.prepare('SELECT id FROM products WHERE name = ?');
-  const updateStmt = db.prepare('UPDATE products SET description = ?, image = ? WHERE id = ?');
-  const insertStmt = db.prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)');
+  const updateWithCat = db.prepare('UPDATE products SET description = ?, image = ?, category = ? WHERE id = ?');
+  const updateNoCat = db.prepare('UPDATE products SET description = ?, image = ? WHERE id = ?');
+  const insertWithCat = db.prepare('INSERT INTO products (name, image, description, category) VALUES (?,?,?,?)');
+  const insertNoCat = db.prepare('INSERT INTO products (name, image, description) VALUES (?,?,?)');
 
   let created = 0;
   let updated = 0;
@@ -398,6 +500,8 @@ app.post('/api/admin/products/import', requireAdmin, csvUpload.single('file'), (
       const name = (r[idx.name] || '').trim().slice(0, 80);
       const description = (r[idx.description] || '').trim().slice(0, 2000);
       const image = (r[idx.image_url] || '').trim();
+      const hasCategoryCol = idx.category !== -1;
+      const category = hasCategoryCol ? ((r[idx.category] || '').trim().slice(0, 40) || null) : null;
       if (!name || !description || !image) {
         failed++;
         errors.push({ row: i + 1, error: '缺少 name/description/image_url' });
@@ -406,10 +510,12 @@ app.post('/api/admin/products/import', requireAdmin, csvUpload.single('file'), (
       try {
         const existing = findByName.get(name);
         if (existing) {
-          updateStmt.run(description, image, existing.id);
+          if (hasCategoryCol) updateWithCat.run(description, image, category, existing.id);
+          else updateNoCat.run(description, image, existing.id);
           updated++;
         } else {
-          insertStmt.run(name, image, description);
+          if (hasCategoryCol) insertWithCat.run(name, image, description, category);
+          else insertNoCat.run(name, image, description);
           created++;
         }
       } catch (e) {
@@ -633,19 +739,35 @@ app.post('/api/pay/alipay/notify', express.urlencoded({ extended: true, limit: '
   }
 });
 
-app.get('/api/products', (_req, res) => {
+app.get('/api/products', (req, res) => {
+  const category = (req.query.category || '').trim();
+  const base = `SELECT p.*,
+    (SELECT COUNT(*) FROM comments c WHERE c.product_id = p.id) AS comment_count,
+    (SELECT COUNT(*) FROM likes l JOIN comments c ON c.id = l.comment_id WHERE c.product_id = p.id) AS like_count
+   FROM products p`;
+  const rows = category
+    ? db.prepare(`${base} WHERE p.category = ? ORDER BY p.id ASC`).all(category)
+    : db.prepare(`${base} ORDER BY p.id ASC`).all();
+  res.json(rows.map(hydrateProduct));
+});
+
+app.get('/api/categories', (_req, res) => {
   const rows = db
     .prepare(
-      `SELECT p.*, (SELECT COUNT(*) FROM comments c WHERE c.product_id = p.id) AS comment_count
-       FROM products p ORDER BY p.id ASC`
+      `SELECT category AS name, COUNT(*) AS count
+       FROM products
+       WHERE category IS NOT NULL AND TRIM(category) <> ''
+       GROUP BY category
+       ORDER BY count DESC, category ASC`
     )
     .all();
   res.json(rows);
 });
 
 app.get('/api/products/:id', (req, res) => {
-  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
-  if (!product) return res.status(404).json({ error: 'not found' });
+  const row = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const product = hydrateProduct(row);
 
   const sort = req.query.sort === 'new' ? 'new' : 'hot';
   const rows = db

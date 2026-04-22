@@ -50,16 +50,50 @@
               <textarea name="description" maxlength="2000" required placeholder="介绍材质、用法、故事……"></textarea>
             </label>
             <label class="field">
-              <span>产品图片（上传）</span>
+              <span>分类（可选，用于首页筛选）</span>
+              <input type="text" name="category" maxlength="40" list="category-suggestions" placeholder="例如：唇部 / 眼影 / 气垫（留空表示未分类）" />
+              <datalist id="category-suggestions"></datalist>
+            </label>
+            <label class="field">
+              <span>封面图（上传 · 首页展示，必填）</span>
               <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp" />
             </label>
             <label class="field">
-              <span>或填写图片链接 (URL)</span>
+              <span>或填写封面图链接 (URL)</span>
               <input type="url" name="image_url" placeholder="https://..." />
             </label>
             <div class="current-image hidden">
-              <span class="muted">当前图片：</span>
+              <span class="muted">当前封面：</span>
               <img alt="" />
+            </div>
+            <label class="field">
+              <span>其他图片（最多 4 张，详情页展示）</span>
+              <input type="file" name="extra_images" accept="image/png,image/jpeg,image/gif,image/webp" multiple />
+              <small class="muted">每次上传会覆盖原来的"其他图片"集合；不传则保持不变。</small>
+            </label>
+            <div class="current-extras hidden">
+              <span class="muted">当前其他图片：</span>
+              <div class="extras-row"></div>
+              <label class="checkbox-field">
+                <input type="checkbox" name="remove_extras" value="1" />
+                <span>移除全部"其他图片"</span>
+              </label>
+            </div>
+            <label class="field">
+              <span>产品视频（可选 · MP4 / WEBM / MOV）</span>
+              <input type="file" name="video" accept="video/mp4,video/webm,video/quicktime" />
+            </label>
+            <label class="field">
+              <span>或填写视频链接 (URL)</span>
+              <input type="url" name="video_url" placeholder="https://..." />
+            </label>
+            <div class="current-video hidden">
+              <span class="muted">当前视频：</span>
+              <video controls preload="metadata"></video>
+              <label class="checkbox-field">
+                <input type="checkbox" name="remove_video" value="1" />
+                <span>移除视频</span>
+              </label>
             </div>
             <div class="sell-block">
               <label class="checkbox-field">
@@ -84,7 +118,7 @@
             <h2>CSV 批量导入产品</h2>
             <a id="template-link" href="/api/admin/products/template.csv" class="link-btn">下载 CSV 模板</a>
           </div>
-          <p class="muted">按 <code>name</code>、<code>description</code>、<code>image_url</code> 三列填写。同名产品会被 <b>更新</b>，新名字会被 <b>新增</b>。最大 2MB。</p>
+          <p class="muted">按 <code>name</code>、<code>description</code>、<code>image_url</code> 三列填写（可选 <code>category</code>）。同名产品会被 <b>更新</b>，新名字会被 <b>新增</b>。</p>
           <form id="import-form">
             <input type="file" name="file" accept=".csv,text/csv" required />
             <button type="submit" class="submit-btn">导入</button>
