@@ -390,6 +390,25 @@ main { padding: 40px 0 80px; min-height: 60vh; }
 .admin-row-meta { font-size: 12px; }
 .admin-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
+/* 上传前压缩 / 视频大小提示 */
+.compress-info {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.compress-info.info-ok { color: #1f7a3a; }
+.compress-info.info-warn {
+  color: #8a5a00;
+  background: #fff6e0;
+  border: 1px solid #f3d98a;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.compress-info.info-error { color: var(--accent); }
+.compress-info b { color: inherit; font-weight: 600; }
+
 @media (max-width: 560px) {
   .admin-row { grid-template-columns: 64px 1fr; grid-template-rows: auto auto; }
   .admin-row-img { width: 64px; height: 64px; }

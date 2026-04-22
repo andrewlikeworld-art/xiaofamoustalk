@@ -389,19 +389,42 @@ async function renderProduct(id) {
 
   usernameInput.value = getUsername();
 
-  fileInput.addEventListener('change', () => {
+  let compressedCommentFile = null;
+
+  fileInput.addEventListener('change', async () => {
     const f = fileInput.files?.[0];
+    compressedCommentFile = null;
     if (!f) {
       filePreview.classList.add('hidden');
       return;
     }
     fileThumb.src = URL.createObjectURL(f);
-    fileName.textContent = f.name;
+    fileName.textContent = f.name + ' · 处理中…';
     filePreview.classList.remove('hidden');
+    try {
+      const r = await window.xftUpload.compressImage(f);
+      compressedCommentFile = r.file;
+      const { fmtSize } = window.xftUpload;
+      fileName.textContent = r.skipped
+        ? `${r.file.name} · ${fmtSize(r.originalSize)}`
+        : `${r.file.name} · ${fmtSize(r.originalSize)} → ${fmtSize(r.newSize)} (-${Math.round((1 - r.newSize / r.originalSize) * 100)}%)`;
+    } catch (err) {
+      if (err.code === 'HEIC') {
+        alert(window.xftUpload.HEIC_MSG);
+        fileInput.value = '';
+        filePreview.classList.add('hidden');
+      } else {
+        errorEl.textContent = '图片处理失败：' + err.message;
+        errorEl.classList.remove('hidden');
+        fileInput.value = '';
+        filePreview.classList.add('hidden');
+      }
+    }
   });
 
   fileClear.addEventListener('click', () => {
     fileInput.value = '';
+    compressedCommentFile = null;
     filePreview.classList.add('hidden');
   });
 
@@ -414,7 +437,24 @@ async function renderProduct(id) {
     errorEl.classList.add('hidden');
     const username = usernameInput.value.trim();
     const body = bodyInput.value.trim();
-    const file = fileInput.files?.[0];
+    let file = compressedCommentFile;
+    const rawFile = fileInput.files?.[0];
+    if (!file && rawFile) {
+      // change 事件还没跑完就点了提交，当场补压一次
+      try {
+        const r = await window.xftUpload.compressImage(rawFile);
+        file = r.file;
+        compressedCommentFile = file;
+      } catch (err) {
+        if (err.code === 'HEIC') {
+          alert(window.xftUpload.HEIC_MSG);
+          return;
+        }
+        errorEl.textContent = '图片处理失败：' + err.message;
+        errorEl.classList.remove('hidden');
+        return;
+      }
+    }
     if (!username) {
       errorEl.textContent = '请填写昵称';
       errorEl.classList.remove('hidden');

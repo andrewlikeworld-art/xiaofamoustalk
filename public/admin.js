@@ -16,6 +16,44 @@ const extrasRow = currentExtras.querySelector('.extras-row');
 const currentVideo = form.querySelector('.current-video');
 const currentVideoEl = currentVideo.querySelector('video');
 
+const infoEls = {
+  image: form.querySelector('.compress-info[data-target="image"]'),
+  extra_images: form.querySelector('.compress-info[data-target="extra_images"]'),
+  video: form.querySelector('.compress-info[data-target="video"]'),
+};
+
+// 压缩后的 File 缓存；submit 时优先用这里的，而不是直接读 input.files
+const compressed = { image: null, extra_images: [], video: null };
+
+function setInfo(key, html, level) {
+  const el = infoEls[key];
+  if (!el) return;
+  if (!html) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    el.classList.remove('info-warn', 'info-ok', 'info-error');
+    return;
+  }
+  el.classList.remove('hidden', 'info-warn', 'info-ok', 'info-error');
+  if (level) el.classList.add('info-' + level);
+  el.innerHTML = html;
+}
+
+function clearAllCompressInfo() {
+  setInfo('image', null);
+  setInfo('extra_images', null);
+  setInfo('video', null);
+  compressed.image = null;
+  compressed.extra_images = [];
+  compressed.video = null;
+}
+
+function fmtSaving(originalSize, newSize) {
+  const { fmtSize } = window.xftUpload;
+  if (newSize >= originalSize) return fmtSize(originalSize);
+  return `${fmtSize(originalSize)} → <b>${fmtSize(newSize)}</b> (-${Math.round((1 - newSize / originalSize) * 100)}%)`;
+}
+
 let editingId = null;
 
 async function api(path, options = {}) {
@@ -81,6 +119,62 @@ logoutBtn.addEventListener('click', async () => {
   showLogin();
 });
 
+// --- 上传前处理：HEIC 拦截、图片压缩、视频大小警告 ---
+form.image.addEventListener('change', async () => {
+  const f = form.image.files?.[0];
+  compressed.image = null;
+  if (!f) return setInfo('image', null);
+  setInfo('image', '处理中…');
+  try {
+    const r = await window.xftUpload.compressImage(f);
+    compressed.image = r.file;
+    setInfo('image', r.skipped ? `无需压缩（${window.xftUpload.fmtSize(r.originalSize)}）` : fmtSaving(r.originalSize, r.newSize), 'ok');
+  } catch (e) {
+    if (e.code === 'HEIC') {
+      alert(window.xftUpload.HEIC_MSG);
+      form.image.value = '';
+      setInfo('image', null);
+    } else {
+      setInfo('image', '处理失败：' + e.message, 'error');
+    }
+  }
+});
+
+form.extra_images.addEventListener('change', async () => {
+  const files = Array.from(form.extra_images.files || []);
+  compressed.extra_images = [];
+  if (!files.length) return setInfo('extra_images', null);
+  if (files.length > 4) {
+    setInfo('extra_images', `最多 4 张，当前选了 ${files.length} 张`, 'error');
+    return;
+  }
+  setInfo('extra_images', `处理中…（${files.length} 张）`);
+  try {
+    const results = await window.xftUpload.compressFileList(files);
+    compressed.extra_images = results.map((r) => r.file);
+    const totalOrig = results.reduce((a, r) => a + r.originalSize, 0);
+    const totalNew = results.reduce((a, r) => a + r.newSize, 0);
+    setInfo('extra_images', `${files.length} 张 · ` + fmtSaving(totalOrig, totalNew), 'ok');
+  } catch (e) {
+    if (e.code === 'HEIC') {
+      form.extra_images.value = '';
+      setInfo('extra_images', null);
+    } else {
+      setInfo('extra_images', '处理失败：' + e.message, 'error');
+    }
+  }
+});
+
+form.video.addEventListener('change', () => {
+  const f = form.video.files?.[0];
+  compressed.video = null;
+  if (!f) return setInfo('video', null);
+  compressed.video = f; // 视频不压缩，直接放原文件
+  const r = window.xftUpload.checkVideoSize(f);
+  if (r.overLimit) setInfo('video', r.message, 'warn');
+  else setInfo('video', `${r.sizeText} · 正常`, 'ok');
+});
+
 async function loadCategorySuggestions() {
   const dl = document.getElementById('category-suggestions');
   if (!dl) return;
@@ -142,6 +236,7 @@ function openForm(product = null) {
   form.image.value = '';
   form.extra_images.value = '';
   form.video.value = '';
+  clearAllCompressInfo();
   form.video_url.value = product && product.video && !product.video.startsWith('/uploads/') ? product.video : '';
   form.remove_extras.checked = false;
   form.remove_video.checked = false;
@@ -187,6 +282,7 @@ function closeForm() {
   currentVideo.classList.add('hidden');
   currentVideoEl.removeAttribute('src');
   currentVideoEl.load();
+  clearAllCompressInfo();
   formError.classList.add('hidden');
 }
 
@@ -200,10 +296,40 @@ form.addEventListener('submit', async (e) => {
   const name = form.name.value.trim();
   const description = form.description.value.trim();
   const category = form.category.value.trim();
-  const file = form.image.files?.[0];
+
+  // 取最终要上传的文件：优先用 change 事件缓存好的压缩版；若 change 还没跑完就当场补压一次。
+  // 保证提交出去的永远是压缩过的版本，避免用户手快点提交导致原图被发上去。
+  let file = null;
+  const rawImage = form.image.files?.[0];
+  if (rawImage) {
+    try {
+      file = compressed.image || (await window.xftUpload.compressImage(rawImage)).file;
+      compressed.image = file;
+    } catch (err) {
+      if (err.code === 'HEIC') return showFormError('封面图是 HEIC，请先转成 JPG');
+      return showFormError('封面图处理失败：' + err.message);
+    }
+  }
   const imageUrl = form.image_url.value.trim();
-  const extraFiles = Array.from(form.extra_images.files || []);
-  const videoFile = form.video.files?.[0];
+
+  let extraFiles = [];
+  const rawExtras = Array.from(form.extra_images.files || []);
+  if (rawExtras.length) {
+    if (compressed.extra_images.length === rawExtras.length) {
+      extraFiles = compressed.extra_images;
+    } else {
+      try {
+        const results = await window.xftUpload.compressFileList(rawExtras);
+        extraFiles = results.map((r) => r.file);
+        compressed.extra_images = extraFiles;
+      } catch (err) {
+        if (err.code === 'HEIC') return showFormError('附图里有 HEIC，请先转成 JPG');
+        return showFormError('附图处理失败：' + err.message);
+      }
+    }
+  }
+
+  const videoFile = compressed.video || form.video.files?.[0] || null;
   const videoUrl = form.video_url.value.trim();
   const removeExtras = form.remove_extras.checked;
   const removeVideo = form.remove_video.checked;

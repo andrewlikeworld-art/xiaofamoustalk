@@ -57,6 +57,7 @@
             <label class="field">
               <span>封面图（上传 · 首页展示，必填）</span>
               <input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp" />
+              <small class="compress-info hidden" data-target="image"></small>
             </label>
             <label class="field">
               <span>或填写封面图链接 (URL)</span>
@@ -70,6 +71,7 @@
               <span>其他图片（最多 4 张，详情页展示）</span>
               <input type="file" name="extra_images" accept="image/png,image/jpeg,image/gif,image/webp" multiple />
               <small class="muted">每次上传会覆盖原来的"其他图片"集合；不传则保持不变。</small>
+              <small class="compress-info hidden" data-target="extra_images"></small>
             </label>
             <div class="current-extras hidden">
               <span class="muted">当前其他图片：</span>
@@ -82,6 +84,7 @@
             <label class="field">
               <span>产品视频（可选 · MP4 / WEBM / MOV）</span>
               <input type="file" name="video" accept="video/mp4,video/webm,video/quicktime" />
+              <small class="compress-info hidden" data-target="video"></small>
             </label>
             <label class="field">
               <span>或填写视频链接 (URL)</span>
@@ -130,6 +133,7 @@
       </section>
     </main>
 
+    <script src="/js/compress.js"></script>
     <script src="/admin.js" type="module"></script>
   </body>
 </html>
