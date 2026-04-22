@@ -1,3 +1,25 @@
+// 只要当前不是走 Tailscale 直连，就提示管理员切到 Tailscale 上传更快
+(function showTailscaleHintIfRemote() {
+  const TAILSCALE_HOST = '100.93.5.119';
+  const LAN_HOST = '192.168.31.65';
+  const host = window.location.hostname;
+  // 本机访问（localhost/127 / LAN / Tailscale / *.ts.net）都不提示
+  const isLocal =
+    host === TAILSCALE_HOST ||
+    host === LAN_HOST ||
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.ts.net');
+  if (isLocal) return;
+  const hint = document.getElementById('tailscale-hint');
+  const link = document.getElementById('tailscale-hint-link');
+  const port = window.location.port || '3000';
+  const url = `http://${TAILSCALE_HOST}:${port}/admin`;
+  link.href = url;
+  link.textContent = url;
+  hint.classList.remove('hidden');
+})();
+
 const loginView = document.getElementById('login-view');
 const dashboardView = document.getElementById('dashboard-view');
 const loginForm = document.getElementById('login-form');

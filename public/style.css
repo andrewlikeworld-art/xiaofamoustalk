@@ -390,6 +390,23 @@ main { padding: 40px 0 80px; min-height: 60vh; }
 .admin-row-meta { font-size: 12px; }
 .admin-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
+/* 管理员 Tailscale 直连提示 */
+.tailscale-hint {
+  margin: 16px 0 0;
+  padding: 10px 14px;
+  background: #e8f2ff;
+  border: 1px solid #b9d6ff;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #244b7a;
+  line-height: 1.55;
+}
+.tailscale-hint a {
+  color: #0b5ed7;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
 /* 上传前压缩 / 视频大小提示 */
 .compress-info {
   display: block;

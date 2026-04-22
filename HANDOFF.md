@@ -202,6 +202,23 @@ sudo journalctl -u cloudflared -f
 
 备选方案（未启用）：Tailscale Funnel / Tailscale Serve，如需切换见旧版文档。
 
+### 管理员上传走 Tailscale 直连（推荐）
+
+公网上传要经 Cloudflare Tunnel 转回本机，实测 ~170 KB/s。管理员在 tailnet 内建议绕开 CF：
+
+| 场景 | URL |
+|---|---|
+| Tailscale 直连（推荐） | `http://100.93.5.119:3000/admin` |
+| 内网直连（同一 Wi-Fi） | `http://192.168.31.65:3000/admin` |
+| Tailscale DNS 名 | `http://workstation.tail9c7884.ts.net:3000/admin` |
+| 公网（慢） | `https://talk.xiaofamous.com/admin` |
+
+**验证过的现状**：server.js 没有 `trust proxy` / CORS / HTTPS 强跳；cookie 不带 `Secure`，HTTP 明文直连 OK。login + 上传都能直接用 Tailscale URL 走完。
+
+iPhone 装 Tailscale App 登录后直接打开 `http://100.93.5.119:3000/admin`，上传原生接本机磁盘，不再经过 CF 的 ~100MB 上限。
+
+admin 页面顶部加了自动提示条：当前 host 不是 tailnet / LAN 时，会提示切到 Tailscale 直连（代码在 [admin.js](public/admin.js) 顶部 IIFE）。
+
 ---
 
 ## 7. 下一步最推荐的任务列表
@@ -428,6 +445,33 @@ rm /home/andrew/xiaofamoustalk/data.sqlite{,-shm,-wal}
 ---
 
 ## 13. 版本日志
+
+### 2026-04-22 (晚) · 前端压缩 + 管理员 Tailscale 直连
+
+**新增**
+- [public/js/compress.js](public/js/compress.js)（挂 `window.xftUpload`）：
+  - `compressImage(file, {maxWidth=1600, quality=0.85})` — `createImageBitmap` 保 EXIF 旋转，大图缩放输出 JPEG；小图直接返回原文件
+  - `checkVideoSize(file, limitMB=100)` — 超过 CF Tunnel 上限返回警告文案
+  - `isHeic` / `compressFileList` / `fmtSize` / `HEIC_MSG`
+- admin 侧（[admin.html](public/admin.html) + [admin.js](public/admin.js)）：
+  - 封面 / 附图 / 视频三个 input 在 `change` 时跑处理，结果塞进 `compressed{image,extra_images,video}` 缓存
+  - submit 优先用缓存；`change` 还没完就点提交也会当场补压一次（避免原图偷偷上传）
+  - 每个输入下方 `.compress-info` 显示"X.X MB → XXX KB (-YY%)"；视频 >100MB 显示橙色警告
+  - HEIC/HEIF 弹窗提示并清空 input，中断上传
+- 公开端评论（[app.js](public/app.js)）：同样的压缩 + HEIC 拦截，文件名旁边展示压缩对比
+- admin 页面顶部**自动提示条**（[admin.html](public/admin.html) `#tailscale-hint`）：
+  当前 host 不是 `100.93.5.119` / `192.168.31.65` / `*.ts.net` / localhost 时，提示切到 Tailscale 直连
+- HANDOFF §6 增加了管理员上传推荐路径表
+
+**没做**
+- 评论区上传目前沿用 5MB 以下不重编码策略；没加进度条
+- compress.js 没上 Web Worker，巨图在主线程编码会卡半秒
+- 没做 Safari EXIF 旋转的 pure-JS fallback（`<img>` fallback 不读方向），iPhone Safari 若看到竖拍躺下再说
+
+**风险 / 注意**
+- 后端没动：`multer` 仍无 fileSize 限制，服务端不拒原图，压缩全靠前端；绕过前端直接 curl 大图会成功。管理员密码可控，可接受
+- Tailscale 直连是 HTTP 明文（tailnet 本身有 WireGuard 加密，所以等于全链路加密），cookie 不带 `Secure` flag
+- 若未来加了 `app.set('trust proxy', 1)` 或 helmet HSTS，要同步检查不要破坏局域网 HTTP 直连
 
 ### 2026-04-22 · 分类 / 多图 / 视频 + 去掉上传尺寸限制
 
