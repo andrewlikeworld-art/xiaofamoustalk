@@ -300,7 +300,7 @@ async function renderProduct(id) {
   const extras = Array.isArray(product.images) ? product.images : [];
   const extrasBlock = extras.length
     ? `<div class="product-extras">${extras
-        .map((url) => `<img src="${escapeHtml(url)}" alt="" data-full="${escapeHtml(url)}" />`)
+        .map((url) => `<img src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async" data-full="${escapeHtml(url)}" />`)
         .join('')}</div>`
     : '';
   const videoBlock = product.video
@@ -314,7 +314,7 @@ async function renderProduct(id) {
     <a class="back-link" href="#/">← 返回全部产品</a>
     <section class="product-page">
       <div class="product-media">
-        <div class="product-hero-img"><img alt="${escapeHtml(product.name)}" src="${escapeHtml(product.image)}" data-full="${escapeHtml(product.image)}" /></div>
+        <div class="product-hero-img"><img alt="${escapeHtml(product.name)}" src="${escapeHtml(product.image)}" fetchpriority="high" decoding="async" data-full="${escapeHtml(product.image)}" /></div>
         ${extrasBlock}
         ${videoBlock}
       </div>
