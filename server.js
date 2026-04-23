@@ -167,7 +167,12 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/uploads', express.static(UPLOAD_DIR));
+// 图片/视频文件名带时间戳,内容永不变 → 强缓存 30 天,immutable
+// 浏览器本地直接复用,CF 边缘也会沿用;新图用新时间戳,天然不冲突
+app.use('/uploads', express.static(UPLOAD_DIR, {
+  maxAge: '30d',
+  immutable: true,
+}));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use((req, res, next) => {
