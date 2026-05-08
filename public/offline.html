@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#c94a3d" />
+  <title>断网了 · Xiaofamous Talk</title>
+  <style>
+    :root { --bg: #fbf8f4; --ink: #1f1d1a; --muted: #857f76; --accent: #c94a3d; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif; }
+    body { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+    .dot { width: 14px; height: 14px; background: var(--accent); border-radius: 50%; margin-bottom: 24px; opacity: 0.85; }
+    h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: 0.02em; }
+    p { margin: 0 0 24px; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 320px; }
+    button { background: var(--accent); color: #fff; border: 0; padding: 10px 22px; border-radius: 999px; font-size: 14px; font-weight: 500; cursor: pointer; }
+    button:active { opacity: 0.85; }
+    .footer { position: fixed; bottom: max(16px, env(safe-area-inset-bottom)); color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="dot"></div>
+  <h1>暂时连不上网络</h1>
+  <p>已缓存的内容仍可浏览。等信号回来再点重试,或者下拉刷新看看。</p>
+  <button onclick="location.reload()">重试</button>
+  <div class="footer">xiaofamous · talk</div>
+</body>
+</html>
