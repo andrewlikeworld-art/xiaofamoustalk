@@ -9,3 +9,5 @@ data.sqlite-wal
 backups/
 secrets/
 .claude/settings.local.json
+CLAUDE.md.bak
+*.bak

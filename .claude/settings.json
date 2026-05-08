@@ -21,7 +21,19 @@
       "Bash(tailscale serve *)",
       "Bash(tailscale funnel *)",
       "Bash(systemctl --user is-active xiaofamoustalk.service)",
-      "Bash(systemctl --user is-enabled xiaofamoustalk.service)"
+      "Bash(systemctl --user is-enabled xiaofamoustalk.service)",
+      "Bash(curl -sI https://www.xiaofamous.com/)",
+      "Bash(curl -sI https://talk.xiaofamous.com/)",
+      "Bash(curl -s https://www.xiaofamous.com/)",
+      "Bash(systemctl --user restart xiaofamoustalk.service)",
+      "Bash(systemctl --user status xiaofamoustalk.service --no-pager)",
+      "Bash(curl -sI https://talk.xiaofamous.com/admin)",
+      "Bash(curl -sI \"https://talk.xiaofamous.com/api/products?category=foo\")",
+      "Bash(curl -sI http://localhost:3000/)",
+      "Bash(python3 -c \"from PIL import Image; print\\('PIL OK, version=', Image.__version__\\)\")",
+      "Bash(python3 -c \"import PIL; print\\(PIL.__file__\\)\")",
+      "Bash(curl -sI http://localhost:3000/uploads/1776827331432-553e4919.jpg)",
+      "Bash(identify \"uploads/1776745819137-ea23b6e5.png\")"
     ],
     "additionalDirectories": [
       "/home/andrew/.config/systemd/user"
