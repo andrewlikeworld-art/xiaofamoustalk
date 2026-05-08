@@ -173,6 +173,21 @@ app.use('/uploads', express.static(UPLOAD_DIR, {
   maxAge: '30d',
   immutable: true,
 }));
+
+// PWA 资源缓存策略:SW 不缓存(更新要立刻生效),manifest 短缓存,icons 长缓存
+app.use((req, res, next) => {
+  if (req.path === '/service-worker.js') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Service-Worker-Allowed', '/');
+  } else if (req.path === '/manifest.webmanifest') {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+  } else if (req.path.startsWith('/icons/')) {
+    res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use((req, res, next) => {
